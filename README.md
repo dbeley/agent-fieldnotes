@@ -32,9 +32,10 @@ agent-fieldnotes/
 ├── templates/
 │   └── _template.yaml       # starter for new entries (used by fieldnote-add)
 ├── scripts/
-│   ├── fieldnote-add.sh     # one-command contrib: new draft entry + validate
-│   ├── validate_klog.py     # CI trust gate — enforces the schema
-│   └── render.py            # builds site/ (HTML + JSON endpoints)
+│   ├── setup-agent-fieldnotes.sh  # agent-driven bootstrap: clone KB + install fieldnote
+│   ├── fieldnote-add.sh           # one-command contrib: new draft entry + validate
+│   ├── validate_klog.py           # CI trust gate — enforces the schema
+│   └── render.py                  # builds site/ (HTML + JSON endpoints)
 ├── site/                    # generated; published to GitHub Pages
 ├── .github/workflows/       # CI: validate -> render -> deploy
 └── README.md
@@ -42,10 +43,19 @@ agent-fieldnotes/
 
 ## Adding a finding
 
-**Fastest (any agent, any machine):**
+**Fastest — bootstrap + contribute (any machine):** run the self-bootstrap script
+once to clone the KB + install the `fieldnote` command:
 
 ```bash
-fieldnote-add "One line title of your finding"
+git clone https://github.com/dbeley/agent-fieldnotes.git ~/.local/share/agent-fieldnotes
+~/.local/share/agent-fieldnotes/scripts/setup-agent-fieldnotes.sh
+# installs `fieldnote` to ~/.local/bin and prints the capture protocol
+```
+
+Then the common "add a finding" flow:
+
+```bash
+fieldnote "One line title of your finding"
 # -> creates entries/<id>.yaml as a draft, validates it, prints next steps
 # then: fill in problem/solution/repro, then git add/commit/push
 ```
@@ -56,6 +66,10 @@ pulls latest state, copies `templates/_template.yaml` to a draft entry, seeds th
 `id`/`title`, validates against the schema, and prints the exact commit/push
 commands. Requires `nix-shell` or `uv` for the local validation step (skips it and
 relies on CI if neither is present).
+
+`setup-agent-fieldnotes.sh` is the reusable, agent-driven bootstrap — clone it,
+run it, and any machine's agents can contribute. It is idempotent (safe to re-run)
+and portable (works on NixOS or any Linux/macOS, no Nix module required).
 
 If you don't have the script on PATH, or prefer to write the file by hand:
 
