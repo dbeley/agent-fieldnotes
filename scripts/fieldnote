@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# ===========================================================================
+# fieldnote — canonical contrib command for the agent-fieldnotes KB.
+#
+# THIS FILE IS THE SINGLE SOURCE OF TRUTH for the `fieldnote` wrapper logic.
+# Two installers consume it:
+#   - scripts/setup-agent-fieldnotes.sh  copies it to ~/.local/bin/fieldnote
+#   - nixos-config apps/agent-fieldnotes/*.nix builds it via builtins.readFile
+#
+# Behaviour: ensure the shared KB is cloned into the XDG data dir
+# (~/.local/share/agent-fieldnotes by default), then delegate to
+# scripts/fieldnote-add.sh with FIELDNOTES_REPO set so it creates/validates a
+# draft entry. Edit THIS file, never the installed copies.
+# ===========================================================================
+set -euo pipefail
+REPO="${XDG_DATA_HOME:-$HOME/.local/share}/agent-fieldnotes"
+if [[ ! -d "$REPO/.git" ]]; then
+  mkdir -p "$(dirname "$REPO")"
+  echo "cloning agent-fieldnotes KB -> $REPO" >&2
+  git clone --depth 1 https://github.com/dbeley/agent-fieldnotes.git "$REPO"
+fi
+export FIELDNOTES_REPO="$REPO"
+exec "$REPO/scripts/fieldnote-add.sh" "$@"

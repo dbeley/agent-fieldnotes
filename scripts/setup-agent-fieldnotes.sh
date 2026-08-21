@@ -47,23 +47,19 @@ else
   git -C "$REPO_DIR" pull --rebase --autostash origin main >/dev/null 2>&1 || true
 fi
 
-# --- 2. install the `fieldnote` command -------------------------------------
+# --- 2. install the `fieldnote` command --------------------------------------
+# The command logic is the SINGLE SOURCE OF TRUTH at scripts/fieldnote (this
+# repo). We copy that canonical file, never an inline copy, so the installed
+# wrapper and the nixos-config packaging stay in sync.
 mkdir -p "$BIN_DIR"
 FIELDNOTE_BIN="$BIN_DIR/fieldnote"
-cat > "$FIELDNOTE_BIN" <<'SCRIPT'
-#!/usr/bin/env bash
-set -euo pipefail
-REPO="${XDG_DATA_HOME:-$HOME/.local/share}/agent-fieldnotes"
-if [[ ! -d "$REPO/.git" ]]; then
-  mkdir -p "$(dirname "$REPO")"
-  echo "cloning agent-fieldnotes KB -> $REPO" >&2
-  git clone --depth 1 https://github.com/dbeley/agent-fieldnotes.git "$REPO"
+if [[ ! -f "$REPO_DIR/scripts/fieldnote" ]]; then
+  echo "ERROR: canonical wrapper missing at $REPO_DIR/scripts/fieldnote — repo out of date?" >&2
+  exit 2
 fi
-export FIELDNOTES_REPO="$REPO"
-exec "$REPO/scripts/fieldnote-add.sh" "$@"
-SCRIPT
+cp "$REPO_DIR/scripts/fieldnote" "$FIELDNOTE_BIN"
 chmod +x "$FIELDNOTE_BIN"
-echo "    installed command: $FIELDNOTE_BIN"
+echo "    installed command: $FIELDNOTE_BIN (from scripts/fieldnote)"
 
 # --- 3. report wiring points -------------------------------------------------
 echo
