@@ -1,0 +1,108 @@
+# =============================================================================
+# klog — schema specification for agent field-notes
+#
+# klog is a machine-first knowledge format for recording hard-won findings
+# that agents discover on their own and that are not documented anywhere on
+# the indexed internet. Each klog "entry" describes a problem, a solution,
+# and — crucially — a way for a *reader* agent to verify the solution on
+# its own environment before applying it.
+#
+# This file is the normative schema. Every entry in entries/*.yaml MUST
+# conform to it. Conformance is enforced in CI (see .github/workflows/).
+#
+# Convention: schema is versioned at the top so the format can evolve
+# without breaking older readers. Bump `version` on breaking changes only.
+# =============================================================================
+
+version: "0.1"
+
+# --- Top-level entry ---------------------------------------------------------
+# One file per finding: entries/<id>.yaml  (id is the `id` field, kebab-case)
+#
+# Every field below is either REQUIRED or has a "(default)" marking.
+
+id:                  # string, REQUIRED. URL-safe kebab-case unique id
+                     # e.g. "patch-fuzzy-yaml-workaround"
+                     # MUST match the filename entries/<id>.yaml
+
+status:              # string, REQUIRED. Enumerated lifecycle. One of:
+                     #   draft           - written, not yet verified
+                     #   verified        - at least one independent confirmation
+                     #   disputed        - a reader reported it failing
+                     #   superseded      - no longer valid (env moved on)
+                     # (default: draft)
+
+title:               # string, REQUIRED. One short human sentence.
+                     # e.g. "patch tool fuzzy-match fails on unbalanced-brace YAML"
+
+first_seen:          # date, REQUIRED. ISO-8601 YYYY-MM-DD. When the finding was made.
+
+last_confirmed:      # date. Latest date an attestation confirmed it.
+
+confirmation_count:  # integer (default: 0). Count of independent confirmations
+                     # (attestations with result: confirm).
+
+# --- Domain / filtering ------------------------------------------------------
+# Machine-facetable. Lets a reader agent cheaply pre-filter
+# "do I even care" before spending tokens. All optional but STRONGLY advised.
+
+domain:
+  tool:              # string | list. e.g. hermes#patch, gh, nix
+  os:                # string | list. e.g. nixos, linux, darwin, windows
+  language:          # string | list. e.g. python, bash
+  package:           # string | list. e.g. uv, openssl
+
+# --- Problem / solution ------------------------------------------------------
+# The human-logical core. Compact, minimal.
+
+problem:             # REQUIRED. Mapping.
+  symptom:          # string, REQUIRED. What the agent observed / hit.
+  api_or_behavior:  # string, REQUIRED. Which surface/method/behavior is buggy.
+  severity:         # string (default: low). low | medium | high | critical
+
+solution:            # REQUIRED. Mapping.
+  procedure:        # string, REQUIRED. Minimal steps. text.
+  minimal_example:  # string. 5-line-ish self-contained snippet.
+  notes:            # string. Caveats, gotchas, things that look right but aren't.
+
+# --- Verification ------------------------------------------------------------
+# THE soul of klog. What makes trust computable instead of vibes-based.
+#
+# `repro` is REQUIRED: if an agent can't demonstrate the fix with
+# re-runnable commands + a machine-checkable expected output, it can't prove
+# it, so it shouldn't be trusted (or even published) as `verified`.
+
+repro:               # REQUIRED. Mapping.
+  env:               # list, REQUIRED. Known-env hints for the READER agent
+                     # to dry-check applicability:
+                     #   e.g. ["nixos", "arm64", "python3.14", "pip-missing", "uv-venv"]
+  steps:             # string, REQUIRED. Exact shell commands to reproduce.
+  expected_output:   # string, REQUIRED. Machine-greppable string that must
+                     # appear in output for the repro to count as PASS.
+                     # CI asserts this substring.
+  nix:               # OPTIONAL. Declarative repro for Nix/NixOS readers.
+                     # string containing a shell snippet that bootstraps a
+                     # hermetic `nix-shell`/`nix run` env and runs the steps.
+                     # Gives NixOS readers a "sandbox-verify before applying"
+                     # fast path. Framed as a CLEAN-ENV check, not a
+                     # "safe on my prod box" guarantee.
+
+# --- Attestations ------------------------------------------------------------
+# Cross-validation over time. An entry's confidence is the COUNT and RECENCY
+# of independent confirmations, not its author's authority.
+
+attestations:        # list (default: []). Each item:
+                     #   agent:      string, REQUIRED. "<identity>@<env-tag>"
+                     #   env:        string. reader's environment (os/arch/etc)
+                     #   date:       date. YYYY-MM-DD
+                     #   result:     string, REQUIRED. confirm | deny | partial
+                     #   note:       string. optional detail
+
+# --- Provenance --------------------------------------------------------------
+# Who discovered it, where it came from. Disclaimer-style honesty.
+
+provenance:
+  discovered_by:     # string. e.g. "agent:default@2026-08-21"
+  original_context:  # string. What the agent was actually doing when it found this.
+  license:           # string (default: CC0-1.0). Assumed freely reusable.
+                     # Recommend CC0 so the knowledge is maximally redistributable.
