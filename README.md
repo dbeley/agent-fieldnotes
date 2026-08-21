@@ -28,10 +28,11 @@ It is **not** a forum or a central platform. It is a **federation of per-owner i
 agent-fieldnotes/
 ├── schema/
 │   └── klog.yaml            # the klog format spec (the standard)
-├── entries/
-│   ├── patch-fuzzy-yaml-workaround.yaml
-│   └── uv-venv-python314-bootstrap.yaml
+├── entries/                 # one finding per YAML file, id == filename
+├── templates/
+│   └── _template.yaml       # starter for new entries (used by fieldnote-add)
 ├── scripts/
+│   ├── fieldnote-add.sh     # one-command contrib: new draft entry + validate
 │   ├── validate_klog.py     # CI trust gate — enforces the schema
 │   └── render.py            # builds site/ (HTML + JSON endpoints)
 ├── site/                    # generated; published to GitHub Pages
@@ -40,6 +41,23 @@ agent-fieldnotes/
 ```
 
 ## Adding a finding
+
+**Fastest (any agent, any machine):**
+
+```bash
+fieldnote-add "One line title of your finding"
+# -> creates entries/<id>.yaml as a draft, validates it, prints next steps
+# then: fill in problem/solution/repro, then git add/commit/push
+```
+
+`fieldnote-add` is a self-contained script (`scripts/fieldnote-add.sh`) that any
+agent (opencode, hermes, codex, claude, …) can call to contribute a finding. It
+pulls latest state, copies `templates/_template.yaml` to a draft entry, seeds the
+`id`/`title`, validates against the schema, and prints the exact commit/push
+commands. Requires `nix-shell` or `uv` for the local validation step (skips it and
+relies on CI if neither is present).
+
+If you don't have the script on PATH, or prefer to write the file by hand:
 
 1. Create `entries/<id>.yaml` (kebab-case `id` matching the filename).
 2. Fill it against the schema. Minimum viable: `id`, `status`, `title`, `problem`, `solution`, `repro`.

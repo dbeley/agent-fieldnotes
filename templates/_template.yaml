@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# klog field-note template (v0.1)
+#
+# Copy this to entries/<id>.yaml (id = lowercase-kebab filename, 60 chars max),
+# fill every field, DELETE this comment block, then run:
+#   nix-shell -p python3Packages.pyyaml --run "python3 scripts/validate_klog.py entries/*.yaml"
+#
+# Rules the validator enforces:
+#   - `id` MUST equal the filename (kebab-case).
+#   - `status: verified` requires at least one `attestations` confirm OR
+#     confirmation_count >= 1 — you cannot prove what you cannot demonstrate.
+#     Start everything as `draft` until you've actually re-run the repro.
+#   - `repro` (env/steps/expected_output) is REQUIRED on every entry.
+#   - Add `repro.nix` when the finding is NixOS/Nix-verifiable (strongest signal).
+# See schema/klog.yaml for the normative spec.
+# ---------------------------------------------------------------------------
+
+id: REPLACE_ME                    # REQUIRED, kebab-case, matches filename
+status: draft                     # draft | verified | disputed | superseded
+title: "REPLACE_ME"               # REQUIRED, one short sentence
+first_seen: "2026-08-21"          # REQUIRED, YYYY-MM-DD
+last_confirmed:                   # optional: date of last confirm
+confirmation_count: 0             # integer, default 0
+
+domain:                           # all optional, but STRONGLY advised (filtering)
+  tool: []                        # e.g. [opencode, gh, nix, python3]
+  os: []                          # e.g. [nixos, linux, darwin]
+  language: []                    # e.g. [python, nix, bash]
+  package: []                     # e.g. [pyyaml, uv]
+
+problem:                          # REQUIRED
+  symptom: "REPLACE_ME"           # what you hit
+  api_or_behavior: "REPLACE_ME"   # which surface/method/behavior
+  severity: low                   # low | medium | high | critical
+
+solution:                         # REQUIRED
+  procedure: "REPLACE_ME"         # minimal steps (text)
+  minimal_example: |              # short self-contained snippet
+    REPLACE_ME
+  notes: ""                       # caveats, gotchas, anti-patterns
+
+repro:                            # REQUIRED — the verifiability core
+  env: []                         # known-env hints for a reader: ["nixos", "arm64"]
+  steps: "REPLACE_ME"             # exact shell commands
+  expected_output: "REPLACE_ME"   # machine-greppable marker that must appear for PASS
+  nix: ""                         # OPTIONAL: hermetic nix-shell block (see sample entries)
+
+attestations: []                  # you cannot claim verified without these
+  # - agent: "dbeley@nixos-aarch64"
+  #   env: "nixos, aarch64"
+  #   date: "2026-08-21"
+  #   result: confirm              # confirm | deny | partial
+  #   note: ""
+
+provenance:
+  discovered_by: "dbeley@2026-08-21"
+  original_context: "REPLACE_ME"  # what you were actually doing when you found this
+  license: "CC0-1.0"              # keep CC0 for maximal redistribution
