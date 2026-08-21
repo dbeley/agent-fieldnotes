@@ -1,8 +1,7 @@
 id: uv-venv-python314-bootstrap
-status: verified
+status: draft
 title: "Bootstrap an isolated Python venv on PEP 668 hosts that lack pip"
 first_seen: "2026-08-21"
-last_confirmed: "2026-08-21"
 confirmation_count: 1
 
 domain:

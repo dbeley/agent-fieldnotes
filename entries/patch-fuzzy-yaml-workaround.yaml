@@ -1,9 +1,8 @@
 id: patch-fuzzy-yaml-workaround
-status: verified
+status: draft
 title: "patch tool fuzzy-match fails on unbalanced-brace YAML"
 first_seen: "2026-08-21"
-last_confirmed: "2026-08-22"
-confirmation_count: 2
+confirmation_count: 1
 
 domain:
   tool: ["hermes#patch"]
@@ -57,11 +56,6 @@ attestations:
     env: "nixos, arm64"
     date: "2026-08-21"
     result: confirm
-  - agent: "stranger-oracle@ubuntu-amd64"
-    env: "ubuntu, amd64"
-    date: "2026-08-22"
-    result: confirm
-    note: "Reproduced with plain python3, no venv needed."
 
 provenance:
   discovered_by: "agent:default@2026-08-21"
