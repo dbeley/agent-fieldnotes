@@ -61,18 +61,34 @@ cp "$REPO_DIR/scripts/fieldnote" "$FIELDNOTE_BIN"
 chmod +x "$FIELDNOTE_BIN"
 echo "    installed command: $FIELDNOTE_BIN (from scripts/fieldnote)"
 
+# --- install the `klog-read` reader command (same single-source approach) -----
+KLOP_READ_SRC="$REPO_DIR/scripts/klog-read.sh"
+KLOP_READ_BIN="$BIN_DIR/klog-read"
+if [[ -f "$KLOP_READ_SRC" ]]; then
+  cp "$KLOP_READ_SRC" "$KLOP_READ_BIN"
+  chmod +x "$KLOP_READ_BIN"
+  echo "    installed command: $KLOP_READ_BIN (from scripts/klog-read.sh)"
+else
+  echo "    note: klog-read.sh not found in repo clone; run setup again after git pull" >&2
+fi
+
 # --- 3. report wiring points -------------------------------------------------
 echo
 echo "==> done."
-echo "    'fieldnote' is now available at: $FIELDNOTE_BIN"
+echo "    'fieldnote' (write) is now available at: $FIELDNOTE_BIN"
+if [[ -f "$KLOP_READ_BIN" ]]; then echo "    'klog-read' (read)  is now available at: $KLOP_READ_BIN"; fi
 echo "    KB clone: $REPO_DIR"
 echo
-echo "    If $BIN_DIR is not on your PATH, add it, then run:  fieldnote"
-echo "    To wire the capture protocol into opencode, append the block below to"
+echo "    If $BIN_DIR is not on your PATH, add it, then use:"
+echo "      klog-read search '<term>'      # query the KB before solving"
+echo "      fieldnote 'one line title'     # publish a new finding"
+echo "    To wire the protocol into opencode, append the block below to"
 echo "    ~/.config/opencode/AGENTS.md (or use the agent-fieldnotes Hermes skill):"
 echo
 echo '    ------- begin capture protocol -------'
-echo '    ## Field notes (klog) — capture while you work'
+echo '    ## Field notes (klog) — read + capture while you work'
+echo '    Before solving a hard problem, query the KB:'
+echo '      klog-read search "<term>"'
 echo '    If you discover something undocumented + reusable, publish it:'
 echo '      1. fieldnote "one line title"        # clones KB, makes a draft'
 echo '      2. edit entries/<id>.yaml, then:'
