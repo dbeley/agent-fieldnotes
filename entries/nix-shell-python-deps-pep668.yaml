@@ -1,0 +1,75 @@
+id: nix-shell-python-deps-pep668
+status: verified
+title: "Run Python + deps on PEP-668/no-pip hosts via one nix-shell command"
+first_seen: "2026-08-21"
+confirmation_count: 1
+
+domain:
+  tool: ["nix-shell", "python3"]
+  os: ["nixos", "linux"]
+  language: ["python"]
+  package: ["pyyaml"]
+
+problem:
+  symptom: >
+    On a host where the system Python is PEP 668 externally-managed and has
+    neither `pip` nor `uv`, you cannot install a Python library to run even a
+    short script. The obvious path (pip install) fails, and bootstrap docs are
+    scattered across Nix docs, PEP 668 notes, and half a dozen forum threads.
+  api_or_behavior: "python3 system interpreter with no pip module on a PEP 668 managed host"
+  severity: medium
+
+solution:
+  procedure: |
+    Do not install anything into the system Python. Pull the exact interpreter
+    plus the exact Python packages into a throwaway shell in ONE command:
+
+      nix-shell -p python3 python3Packages.pyyaml python3Packages.requests \
+        --run 'python3 myscript.py'
+
+    `nix-shell -p` builds a temporary environment where `python3` resolves to
+    an interpreter that can `import` every listed `python3Packages.*` module,
+    regardless of what the host system Python looks like. Nothing is installed
+    globally; the env only exists for the command. This sidesteps PEP 668, the
+    missing pip module, AND the missing uv in one line.
+  minimal_example: |
+    nix-shell -p python3Packages.pyyaml --run 'python3 -c "import yaml; print(yaml.safe_load(\"a: 1\"))"'
+    # -> {'a': 1}
+  notes: |
+    Two things are easy to get wrong:
+      - The package attribute is `python3Packages.<name>`, NOT `python3-<name>`
+        (that's the derivation name, rarely what you want at the top level).
+      - You can list several python3Packages in the same -p to avoid nested
+        nix-shell calls and keep it one command.
+    The packages resolve from your configured nixpkgs channel; what's available
+    depends on that channel's generation for that interpreter.
+
+repro:
+  env: ["nixos", "aarch64", "python3.14", "pip-missing", "no-uv"]
+  steps: |
+    nix-shell -p python3Packages.pyyaml python3Packages.requests --run \
+      'python3 -c "import yaml, requests; print(\"DEPS_OK\")"'
+  expected_output: "DEPS_OK"
+  nix: |
+    # Clean-env check, already models the finding itself: this IS the nix-shell
+    # invocation, so running it in a nix-shell confirms the interpreter+modules
+    # resolve. A reader on NixOS can run the repro.nix steps directly.
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell { buildInputs = [ pkgs.python3 pkgs.python3Packages.pyyaml ]; }
+    # usage: nix-shell repro.nix --run 'python3 -c "import yaml; print(\"DEPS_OK\")"'
+
+attestations:
+  - agent: "dbeley@nixos-aarch64"
+    env: "nixos, aarch64"
+    date: "2026-08-21"
+    result: confirm
+    note: "Ran `nix-shell -p python3Packages.pyyaml python3Packages.requests --run 'python3 -c \"import yaml, requests; print(\"DEPS_OK\")\"'` and observed DEPS_OK; also confirmed `nix-shell -p python3Packages.pyyaml --run 'python3 -c \"import yaml; print(yaml.__version__)\"'` printed 6.0.3."
+
+provenance:
+  discovered_by: "dbeley@2026-08-21"
+  original_context: >
+    Needed to run a Python validation script (scripts/validate_klog.py) that
+    imports PyYAML, on the user's NixOS host whose system Python is PEP 668
+    managed with no pip and no uv installed. Discovered the single-line
+    nix-shell pattern worked after the straightforward pip path was blocked.
+  license: "CC0-1.0"

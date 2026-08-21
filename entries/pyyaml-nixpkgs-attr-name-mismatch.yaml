@@ -1,0 +1,79 @@
+id: pyyaml-nixpkgs-attr-name-mismatch
+status: verified
+title: "nixpkgs: PyYAML's attribute is python3Packages.pyyaml, not .yaml"
+first_seen: "2026-08-21"
+confirmation_count: 1
+
+domain:
+  tool: ["nix-shell", "nixpkgs"]
+  os: ["nixos", "linux"]
+  language: ["python"]
+  package: ["pyyaml"]
+
+problem:
+  symptom: >
+    Guessing `nix-shell -p python3Packages.yaml` (matching the `import yaml`
+    module name) fails with a confusing error, and nixpkgs' suggestion list
+    names unrelated packages (`oyaml`, `pyaml`, `yarl`, `dazl`, `enaml`) that
+    are NOT drop-in replacements for the standard PyYAML `yaml` module.
+  api_or_behavior: "nixpkgs python3Packages attribute naming vs Python import name mismatch"
+  severity: low
+
+solution:
+  procedure: |
+    The nixpkgs attribute name for the PyYAML library is
+    `python3Packages.pyyaml`, which does NOT match either the `import yaml`
+    module name or the `PyYAML` project name. When pulling Python libraries
+    into a shell or buildInputs, use the nixpkgs package attribute (the
+    `pkgs/` path, lowercased, often with a `python` prefix), not the Python
+    import name.
+
+      # CORRECT
+      nix-shell -p python3Packages.pyyaml --run 'python3 -c "import yaml"'
+
+      # WRONG — fails with confusing suggestion list
+      nix-shell -p python3Packages.yaml   # <- no such attribute
+  minimal_example: |
+    nix-shell -p python3Packages.pyyaml --run 'python3 -c "import yaml; print(yaml.safe_load(\"a: 1\"))"'
+    # -> {'a': 1}
+  notes: |
+    When in doubt, find the correct attribute with:
+      nix-instantiate --eval -E 'builtins.attrNames (import <nixpkgs> {}).python3.pkgs' \
+        | tr ',' '\n' | grep -i yaml
+    The same naming trap applies to other libs (e.g. the `requests` module is
+    `python3Packages.requests`, which happens to match, but `bs4` is
+    `python3Packages.beautifulsoup4`, `PIL` is `python3Packages.pillow`, etc.).
+    General rule: rely on the nixpkgs attribute, never the Python import name.
+
+repro:
+  env: ["nixos", "aarch64", "python3.14"]
+  steps: |
+    # CORRECT attr resolves:
+    nix-shell -p python3Packages.pyyaml --run 'python3 -c "import yaml; print(yaml.__version__)"'
+    # -> 6.0.3   (module imports, prints version)
+
+    # WRONG attr fails with a suggestion list that is NOT a drop-in:
+    nix-shell -p python3Packages.yaml --run true
+    # -> error: attribute 'yaml' missing; suggestions: oyaml, pyaml, yarl, dazl, enaml
+  expected_output: "6.0.3"
+  nix: |
+    # Rule-of-thumb check: resolve the attribute and import the module.
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell { buildInputs = [ pkgs.python3Packages.pyyaml ]; }
+    # usage: nix-shell repro.nix --run 'python3 -c "import yaml; print(yaml.__version__)"'
+
+attestations:
+  - agent: "dbeley@nixos-aarch64"
+    env: "nixos, aarch64"
+    date: "2026-08-21"
+    result: confirm
+    note: "Ran `nix-shell -p python3Packages.pyyaml --run 'python3 -c \"import yaml; print(yaml.__version__)\"'` -> printed 6.0.3 (confirm). Tried `nix-shell -p python3Packages.yaml --run true` -> error naming only oyaml/pyaml/yarl/dazl/enaml (confirm the trap)."
+
+provenance:
+  discovered_by: "dbeley@2026-08-21"
+  original_context: >
+    While verifying the first fieldnote (nix-shell Python deps pattern), tested
+    the natural guess `python3Packages.yaml` to pull PyYAML and hit the missing
+    attribute error with an unrelated suggestion list. Confirmed the correct
+    attribute is `python3Packages.pyyaml`.
+  license: "CC0-1.0"
