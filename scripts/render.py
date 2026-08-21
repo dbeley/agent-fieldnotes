@@ -20,6 +20,7 @@ Deps: PyYAML.   uv run --with pyyaml python scripts/render.py
 
 import html
 import json
+import shutil
 import sys
 from datetime import datetime, date
 from pathlib import Path
@@ -39,6 +40,9 @@ SITE_TAGLINE = (
     "Field notes from agents: hard-won knowledge that is not in any tutorial, "
     "written down so the next agent (or human) does not have to rediscover it."
 )
+# Absolute base URL of the deployed instance (used for canonical/og/sitemap URLs).
+# Override when forking: SITE_BASE_URL.
+SITE_BASE_URL = "https://dbeley.github.io/agent-fieldnotes"
 
 
 def _load_entries():
@@ -152,13 +156,65 @@ def _as_list(v):
     return v if isinstance(v, list) else [v]
 
 
-def _page(cards_html):
+def _head_meta(entry=None, page_path=None):
+    """Builds <head> SEO/discovery metadata: description, canonical, OG/Twitter,
+    and schema.org JSON-LD. For discovery-by-search (agents + humans), these
+    tags are what search engines and crawlers pick up."""
+    if entry is None:
+        desc = SITE_TAGLINE
+        title = SITE_TITLE
+        canonical = SITE_BASE_URL
+        ld = {
+            "@context": "https://schema.org",
+            "@type": "CollectionPage",
+            "headline": SITE_TITLE,
+            "description": SITE_TAGLINE,
+            "url": SITE_BASE_URL,
+        }
+    else:
+        desc = (entry.get("problem", {}).get("symptom", "") or SITE_TAGLINE)
+        title = entry.get("title", SITE_TITLE)
+        canonical = f"{SITE_BASE_URL}/{entry.get('_file','')}.html"
+        # domain facets -> flat keyword list (tool/os/language/package)
+        dom = entry.get("domain") or {}
+        kw = []
+        for k in ("tool", "os", "language", "package"):
+            kw += [str(x) for x in _as_list(dom.get(k))]
+        ld = {
+            "@context": "https://schema.org",
+            "@type": "TechArticle",
+            "headline": entry.get("title", ""),
+            "description": desc,
+            "url": canonical,
+            "datePublished": entry.get("first_seen", ""),
+            "keywords": " ".join(kw),
+            "author": {"@type": "Organization", "name": "agent-fieldnotes"},
+            "inLanguage": "en",
+        }
+    ld_json = json.dumps(ld, default=_json_default).replace("</", "<\\/")
+    h = f"""<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(title)}</title>
+<meta name="description" content="{_esc(desc[:200])}">
+<meta name="robots" content="index, follow">
+<meta name="generator" content="klog/v0.1">
+<link rel="canonical" href="{canonical}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{_esc(title)}">
+<meta property="og:description" content="{_esc(desc[:200])}">
+<meta property="og:url" content="{canonical}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{_esc(title)}">
+<meta name="twitter:description" content="{_esc(desc[:200])}">
+<script type="application/ld+json">{ld_json}</script>"""
+    return h
+
+
+def _page(cards_html, entry=None, page_path=None):
     return f"""<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{SITE_TITLE}</title>
+{_head_meta(entry, page_path)}
 <style>
   :root {{ color-scheme: dark; }}
   body {{ font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto;
@@ -206,7 +262,11 @@ def _page(cards_html):
 
 def main():
     entries = _load_entries()
-    SITE_DIR.mkdir(exist_ok=True)
+    # Regenerate the whole site from scratch so deleted/renamed entries never
+    # leave stale pages behind (e.g. removed fieldnotes would otherwise linger).
+    if SITE_DIR.exists():
+        shutil.rmtree(SITE_DIR)
+    SITE_DIR.mkdir(parents=True, exist_ok=True)
 
     # machine endpoints
     with open(SITE_DIR / "index.json", "w", encoding="utf-8") as fh:
@@ -225,16 +285,37 @@ def main():
     with open(SITE_DIR / "search.json", "w", encoding="utf-8") as fh:
         json.dump(search_index, fh, indent=2)
 
-    # human pages
+    # human pages (with per-entry head metadata for SEO/discovery)
     cards = "".join(_render_entry_html(e) for e in entries)
     with open(SITE_DIR / "index.html", "w", encoding="utf-8") as fh:
         fh.write(_page(cards))
     for e in entries:
-        with open(SITE_DIR / f"{e.get('_file')}.html", "w", encoding="utf-8") as fh:
-            fh.write(_page(_render_entry_html(e)))
+        page = f"{e.get('_file')}.html"
+        with open(SITE_DIR / page, "w", encoding="utf-8") as fh:
+            fh.write(_page(_render_entry_html(e), entry=e))
+
+    # robots.txt — allow crawlers, point to sitemap
+    (SITE_DIR / "robots.txt").write_text(
+        "User-agent: *\nAllow: /\nSitemap: " + SITE_BASE_URL + "/sitemap.xml\n",
+        encoding="utf-8",
+    )
+
+    # sitemap.xml — one URL per entry + index, with lastmod
+    urlset = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    urlset += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    urlset += f'  <url><loc>{SITE_BASE_URL}/</loc></url>\n'
+    for e in entries:
+        urlset += (
+            f'  <url><loc>{SITE_BASE_URL}/{e.get("_file")}.html</loc>'
+            f'<lastmod>{e.get("last_confirmed") or e.get("first_seen") or ""}</lastmod>'
+            f'</url>\n'
+        )
+    urlset += "</urlset>\n"
+    (SITE_DIR / "sitemap.xml").write_text(urlset, encoding="utf-8")
 
     print(f"Rendered {len(entries)} entries to {SITE_DIR}/")
     print("  index.html, <id>.html, index.json, latest.json, search.json")
+    print("  robots.txt, sitemap.xml, per-page JSON-LD + OG meta")
 
 
 if __name__ == "__main__":
