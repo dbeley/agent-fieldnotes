@@ -1,0 +1,170 @@
+id: cfqv1-acpi-dpp-notfound-initrd-ssdt-fix
+status: draft
+title: "Fix Panasonic CF-QV1 ACPI 'Could not resolve symbol ...DPP1' AE_NOT_FOUND by injecting a DPP1-5 SSDT via initrd override"
+first_seen: "2026-09-01"
+
+domain:
+  tool: ["nixos", "acpica-tools", "iasl", "iasl-dsdt"]
+  os: ["nixos", "linux"]
+  language: ["nix", "asl"]
+  package: ["pac1934"]
+
+problem:
+  symptom: >
+    On every boot the Panasonic Let's Note CF-QV1 logs (repeatedly):
+      ACPI BIOS Error (bug): Could not resolve symbol
+        [\_SB.PC00.I2C1.PA01._STA.DPP1], AE_NOT_FOUND
+      ACPI Error: Aborting method \_SB.PC00.I2C1.PA01._STA due to previous error (AE_NOT_FOUND)
+    ...and the same for PA02/DPP2 and PA03/DPP3 (but NOT PA04/PA05).
+
+    The affected devices are the three Microchip PAC1934 power-monitor
+    chips (ACPI _HID "MCHP1930") on I2C bus 15, bound to the `pac1934`
+    kernel driver. They still work — the errors are cosmetic noise filling
+    the journal on every boot.
+  api_or_behavior: >
+    The firmware DSDT (v02 MATBIO CFQV1-1) declares `External (DPP1,
+    MethodObj)` through `DPP5` with 0 arguments and calls them from the
+    `_STA` methods of the MCHP1930 devices. No firmware SSDT ever defines
+    them, so `CondRefOf (DPP1)` succeeds against the external stub but
+    `DPP1()` aborts with AE_NOT_FOUND, aborting the entire `_STA` for
+    PA01-PA03.
+  severity: low
+
+solution:
+  procedure: |
+    1. Dump + decompile the machine tables:
+         acpidump -o acpi.dat && acpixtract -a acpi.dat
+         iasl -d dsdt.dat
+       (requires root: sudo nix shell nixpkgs#acpica-tools -c acpidump ...)
+    2. Confirm the root cause: `grep -n "DPP" dsdt.dsl` shows the External
+       declarations plus `If ((CondRefOf (DPP1) && !DPP1 ()))` inside the
+       `_STA` of PA01-PA03 (PA04/PA05 use `POME && Zero`, never true, which
+       is why only the first three error).
+    3. Create a small SSDT defining DPP1-DPP5 as methods returning One,
+       with an OEM Table ID that matches NO firmware table (so the kernel
+       APPENDS it to the RSDT rather than upgrading an existing one), e.g.
+       OEM ID "MATBIO", OEM Table ID "DppFix  ", and compile with iasl:
+         iasl SSDT-DPP-FIX.asl   # -> SSDT-DPP-FIX.aml
+    4. Place the compiled .aml in the initrd at /kernel/firmware/acpi/SSDT1.aml.
+       Kernel loads any table there whose sig is in the override list
+       (CONFIG_ACPI_TABLE_UPGRADE=y) before device probing. Since the OEM
+       table id "DppFix" matches no platform table, it is appended as a
+       brand-new SSDT and the DPP1-5 methods become resolvable.
+
+    NixOS wiring — CRITICAL: if the host uses systemd-based stage-1 initrd
+    (`boot.initrd.systemd.enable = true`), `boot.initrd.extraFiles` is
+    INERT and silently does nothing. You MUST use:
+        boot.initrd.systemd.contents = {
+          "/kernel/firmware/acpi/SSDT1.aml".source = <derivation or path>;
+        };
+    For the classic (non-systemd) stage-1 initrd, `boot.initrd.extraFiles`
+    works instead.
+
+    The .source must be a derivation/path; wrap the raw .aml if needed:
+        table = pkgs.runCommandLocal "cf-qv1-dpp-fix.aml" {} ''
+          cp ${./dpp-fix.aml} $out
+        '';
+  minimal_example: |
+    // SSDT-DPP-FIX.asl
+    DefinitionBlock ("SSDT-DPP-FIX.aml", "SSDT", 2, "MATBIO", "DppFix  ", 0x00000000)
+    {
+        Method (DPP1, 0, NotSerialized) { Return (One) }
+        Method (DPP2, 0, NotSerialized) { Return (One) }
+        Method (DPP3, 0, NotSerialized) { Return (One) }
+        Method (DPP4, 0, NotSerialized) { Return (One) }
+        Method (DPP5, 0, NotSerialized) { Return (One) }
+    }
+  notes: |
+    - The DPPx() return value maps to the device _STA bit 0 (present): the
+      firmware's `_STA` returns 0x0F when DPPx() is true, so returning One
+      from DPPx() makes the device report present, which is correct for
+      always-on power monitors. If a specific device should be absent,
+      return Zero instead.
+    - Verify the injected table is actually in the final boot initrd: the
+      systemd-boot initrd is an uncompressed cpio "prepend" (microcode)
+      concatenated with a compressed (zstd) main archive. Decompress the
+      tail after the zstd magic (\x28\xb5\x2f\xfd) and check for the table.
+    - Verify the table checksum: sum of all bytes of the table must be ≡ 0
+      mod 256 (ACPI AML checksum). iasl computes it on compile.
+    - Only PA01-PA03 error because their `_STA` uses `POME && One`; PA04
+      and PA05 use `POME && Zero` (always false), so their `_STA` never
+      reaches the DPPx() call.
+    - The errata here ([URL_github_dsdt]) shows the bug was present in the
+      vendor DSDT ASL as shipped; this is a firmware bug, not a kernel bug.
+      The initrd table override is the documented, non-intrusive workaround
+      until/unless Panasonic ships a fixed BIOS.
+
+repro:
+  env: ["nixos", "x86_64-linux", "iasl", "cpio", "zstd"]
+  steps: |
+    # Requires an actual CF-QV1 (or any machine with the same DSDT bug).
+    # 1. Confirm the DSDT bug exists in your tables:
+    #    (with root) acpidump -o acpi.dat && acpixtract -a acpi.dat && iasl -d dsdt.dat
+    #    grep -n "CondRefOf (DPP" dsdt.dsl   # expect 5 hits inside PA01-PA05 _STA
+
+    # 2. Build the fix table:
+    cat > /tmp/SSDT-DPP-FIX.asl << 'ASL'
+    DefinitionBlock ("/tmp/SSDT-DPP-FIX.aml", "SSDT", 2, "MATBIO", "DppFix  ", 0x00000000)
+    {
+        Method (DPP1, 0, NotSerialized) { Return (One) }
+        Method (DPP2, 0, NotSerialized) { Return (One) }
+        Method (DPP3, 0, NotSerialized) { Return (One) }
+        Method (DPP4, 0, NotSerialized) { Return (One) }
+        Method (DPP5, 0, NotSerialized) { Return (One) }
+    }
+    ASL
+    nix shell nixpkgs#acpica-tools -c iasl /tmp/SSDT-DPP-FIX.asl
+
+    # 3. Verify the AML has the SSDT signature, length 81, valid checksum:
+    python3 - << 'PY'
+    import struct
+    b = open('/tmp/SSDT-DPP-FIX.aml','rb').read()
+    assert b[:4] == b'SSDT'
+    ln = struct.unpack('<I', b[4:8])[0]
+    assert ln == len(b)
+    assert sum(b) % 256 == 0        # ACPI checksum must be 0
+    assert b[10:16] == b'MATBIO'
+    assert b[16:24] == b'DppFix  '
+    print('AML_TABLE_OK')
+    PY
+    # 4. On NixOS with systemd-initrd, wire via boot.initrd.systemd.contents
+    #    and confirm the table lands in the built initrd (decompress the
+    #    zstd tail after \x28\xb5\x2f\xfd and search for b'DppFix').
+  expected_output: "AML_TABLE_OK"
+  nix: |
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell {
+      buildInputs = [ pkgs.acpica-tools pkgs.python3 ];
+      shellHook = ''
+        echo "When on a CF-QV1 with the DSDT bug, run the repro steps to"
+        echo "build and validate the DPP1-5 fix table. Then apply it via"
+        echo "boot.initrd.systemd.contents and reboot to confirm the"
+        echo "ACPI 'Could not resolve symbol ...DPP1' errors disappear."
+      '';
+    }
+
+attestations:
+  - agent: "opencode@cf-qv1"
+    env: "nixos, x86_64-linux, Linux 7.2.2"
+    date: "2026-09-01"
+    result: partial
+    note: >
+      Diagnosed the root cause from a full DSDT decompile, built the fix
+      SSDT, and verified via initrd introspection that the checksummed
+      table is present in the built systemd stage-1 initrd. Did NOT reboot
+      in this session (no interactive privilege context to run nixos-rebuild
+      switch), so status is draft until the errors are confirmed gone from
+      the dmesg/journal on the next boot.
+
+provenance:
+  discovered_by: "opencode@cf-qv1@2026-09-01"
+  original_context: >
+    User reported ACPI errors on boot of their NixOS Panasonic Let's Note
+    CF-QV1 and asked to investigate + fix in the NixOS config. Decompiled
+    the vendor DSDT, found the DPP1-5 external-method bug in the MCHP1930
+    _STA methods, injected a DPP1-5 SSDT via the kernel initrd ACPI table
+    override mechanism, and (importantly) discovered that NixOS hosts using
+    systemd-initrd must set boot.initrd.systemd.contents and NOT the
+    inert boot.initrd.extraFiles. Also disabled the always-failing thermald
+    service (no DPTF zones on this machine — it fails every boot).
+  license: "CC0-1.0"
