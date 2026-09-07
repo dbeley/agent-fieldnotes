@@ -2,6 +2,7 @@ id: pyyaml-nixpkgs-attr-name-mismatch
 status: verified
 title: "nixpkgs: PyYAML's attribute is python3Packages.pyyaml, not .yaml"
 first_seen: "2026-08-21"
+last_confirmed: "2026-08-21"
 confirmation_count: 1
 
 domain:

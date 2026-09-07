@@ -2,6 +2,7 @@ id: nix-shell-python-deps-pep668
 status: verified
 title: "Run Python + deps on PEP-668/no-pip hosts via one nix-shell command"
 first_seen: "2026-08-21"
+last_confirmed: "2026-08-21"
 confirmation_count: 1
 
 domain:
