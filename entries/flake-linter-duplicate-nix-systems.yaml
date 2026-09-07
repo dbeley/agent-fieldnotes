@@ -1,7 +1,9 @@
 id: flake-linter-duplicate-nix-systems
-status: draft
+status: verified
 title: "flake-linter warns 'nix-systems/default has multiple versions' — fix with systems.follows"
 first_seen: "2026-08-30"
+last_confirmed: "2026-08-30"
+confirmation_count: 1
 
 domain:
   tool: ["flake-linter", "nix flake"]
