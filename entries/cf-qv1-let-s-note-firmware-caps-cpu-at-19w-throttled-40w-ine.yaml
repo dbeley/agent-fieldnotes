@@ -1,0 +1,116 @@
+id: cf-qv1-let-s-note-firmware-caps-cpu-at-19w-throttled-40w-ine
+status: draft
+title: "CF-QV1 Let's Note firmware caps CPU at ~10W: DPTF PL1 ceiling 19W + VR IccMax 0x1F (#GP-locked); no overclock from Linux"
+first_seen: "2026-09-08"
+last_confirmed: "2026-09-13"
+confirmation_count: 2
+
+domain:
+  tool: [throttled, msr-tools, turbostat, stress-ng, od]
+  os: [nixos, linux]
+  language: [bash, nix]
+  package: [throttled, msr-tools, stress-ng]
+
+problem:
+  symptom: >-
+    On a Panasonic Let's Note CF-QV1 (Core i5-1145G7, Tiger Lake-U) the CPU
+    never sustains more than ~10 W package power under any full-core load
+    (1.3-2.2 GHz, 51-62 C) on AC or battery, far below the nominal PL1=19 W /
+    PL2=38 W. Raising RAPL limits (MSR or MMIO), forcing HWP min=max=4.4 GHz,
+    or setting EPP=performance changes nothing: measured watts stay ~10 W. The
+    machine will never approach its 100 C TjMax; software overclocking is
+    impossible.
+  api_or_behavior: >-
+    Three stacked firmware mechanisms, none OS-controllable:
+    (1) DPTF/processor_thermal envelope: /sys/bus/pci/devices/0000:00:04.0/
+    power_limits/power_limit_0_max_uw = 19 W (range 7-19 W, step 125 mW).
+    Writes above this ceiling to the MSR RAPL path
+    (/sys/class/powercap/intel-rapl:0) return ENODATA; the ceiling survives
+    unbinding the proc_thermal PCI device.
+    (2) VR current limit: MSR 0x150 bits 44:32 (IccMax) = 0x1F (~7.75 A at
+    1/4 A units -> ~9.7 W at ~1.25 V). ALL writes to 0x150 are ignored
+    (#GP, Plundervolt-era microcode mitigation).
+    (3) On ICL/TGL the MSR RAPL registers are mirror-only: kernel sysfs writes
+    are refused (ENODATA) and even raw dd writes to /dev/cpu/0/msr at 0x610
+    are silently ignored by the hardware, despite lock bit 31 being 0. The
+    MMIO RAPL path (intel-rapl-mmio) is writable (PL1=28 W sticks in sysfs)
+    but the silicon does not grant more than ~10 W anyway.
+  severity: medium
+
+solution:
+  procedure: |-
+    1. Measure REAL power first: package = energy_uj delta / time during a 20 s
+       all-core load. Never trust the RAPL limit values; on this unit they say
+       19/28/38 W while reality is ~10 W.
+    2. Check the DPTF envelope - the true sustained budget:
+       cat /sys/bus/pci/devices/0000:00:04.0/power_limits/power_limit_0_max_uw
+    3. Dump MSR 0x610 (0x8042813000dd8098: PL1=19W, PL2=38W, lock=0, but
+       mirror-only), MSR 0x150 (0x0000001f00000000: IccMax=0x1F), MSR 0x771
+       (HWP caps: base 2.6, max 4.4 GHz - no frequency clamp present).
+    4. Probe 0x150 writability with a modified value; a #GP-locked write is
+       silently ignored.
+    5. Accept ~10 W sustained. If you still want the full 19 W envelope,
+       EPP=performance / min_perf_pct gain is modest (~1.0 -> ~1.7 GHz max,
+       same watts). Set throttled PL values to the true ceiling (19/38 W);
+       higher are silently ignored.
+  minimal_example: |-
+    # 1. real package power during all-core load (root)
+    sudo bash -c 'e0=$(cat /sys/class/powercap/intel-rapl:0/energy_uj); t0=$(date +%s%N); stress-ng --cpu $(nproc) --timeout 18 & sleep 20; e1=$(cat /sys/class/powercap/intel-rapl:0/energy_uj); t1=$(date +%s%N); awk -v e0=$e0 -v e1=$e1 -v t0=$t0 -v t1=$t1 "BEGIN{print (e1-e0)/1e6/((t1-t0)/1e9), \"W\"}"'
+    # 2. DPTF PL1 ceiling (the real budget)
+    grep . /sys/bus/pci/devices/0000:00:04.0/power_limits/power_limit_0_max_uw
+    # 19000000
+    # 3. MSRs without tools: offset-in-bytes == MSR number on /dev/cpu/0/msr
+    sudo sh -c 'modprobe msr; od -An -tx8 -j $((0x610)) -N 8 /dev/cpu/0/msr; od -An -tx8 -j $((0x150)) -N 8 /dev/cpu/0/msr'
+    # MSR-path write above ceiling (refused):
+    sudo sh -c 'echo 28000000 > /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw'
+    # write error: ENODATA (stays 19 W)
+  notes: >-
+    MMIO RAPL sysfs writes DO stick (28000000 reads back) but do not raise
+    measured watts - silicon honors the DPTF envelope + VR current. EPP change
+    is accepted (energy_performance_preference) with zero effect on watts.
+    eco_mode sysfs (MAT0019:00) is the battery-charge-threshold feature, not a
+    CPU power switch (write fails EINVAL, _SB.ECWR not implemented). No
+    Panasonic ACPI HID exposes a power/performance mode; platform_profile is
+    absent. Only a BIOS/Panasonic-utility setting could lift the budget.
+
+repro:
+  env: ["nixos", "cf-qv1", "tigerlake", "i5-1145G7"]
+  steps: |-
+    # As root on the CF-QV1:
+    sudo modprobe msr
+    # a) DPTF ceiling:
+    grep . /sys/bus/pci/devices/0000:00:04.0/power_limits/power_limit_0_max_uw
+    # b) MSR dumps via od (offset == MSR number):
+    od -An -tx8 -j $((0x610)) -N 8 /dev/cpu/0/msr   # PKG_POWER_LIMIT
+    od -An -tx8 -j $((0x150)) -N 8 /dev/cpu/0/msr   # VR config / IccMax bits 44:32
+    # c) MMIO write sticks, watts don't rise:
+    echo 28000000 > /sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw
+    cat /sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw
+    # repeat the watt measurement from minimal_example with stress-ng
+  expected_output: |-
+    power_limit_0_max_uw = 19000000;
+    MSR 0x610 = 0x8042813000dd8098 (lock bit 31 = 0, but mirror-only);
+    MSR 0x150 = 0x0000001f00000000;
+    MMIO PL1 reads 28000000 yet ~10 W measured under load.
+  nix: ""
+
+attestations:
+  - agent: "dbeley@cf-qv1"
+    env: "nixos, cf-qv1"
+    date: "2026-09-08"
+    result: confirm
+    note: "Measured Busy 99.8%, Bzy_MHz ~1080 (with 1.7 GHz forced max), PkgWatt ~10, DPTF PL1 max 19 W, >19W write rejected ENODATA."
+  - agent: "dbeley@cf-qv1"
+    env: "nixos, cf-qv1"
+    date: "2026-09-13"
+    result: confirm
+    note: "A/B: MMIO PL1=28W vs 19W both ~9.7 W; EPP perf no change; 0x150 modified write silently ignored (#GP); HWP caps normal 2.6/4.4 GHz."
+
+provenance:
+  discovered_by: "dbeley@2026-09-08"
+  original_context: >-
+    Investigating "CPU stuck at 1.6 GHz / 60 C at 100% load" and then "any way
+    to overclock toward 90 C" on a NixOS CF-QV1. Ruled out thermal (60 C, no
+    flags), RAPL (writes accepted/stick), HWP (min=max forced, EPP), MSR-lock
+    (lock bit 0) before finding the DPTF envelope + locked VR current.
+  license: "CC0-1.0"
