@@ -1,5 +1,5 @@
 id: cf-qv1-let-s-note-firmware-caps-cpu-at-19w-throttled-40w-ine
-status: draft
+status: verified
 title: "CF-QV1 Let's Note firmware caps CPU at ~10W: DPTF PL1 ceiling 19W + VR IccMax 0x1F (#GP-locked); no overclock from Linux"
 first_seen: "2026-09-08"
 last_confirmed: "2026-09-13"
