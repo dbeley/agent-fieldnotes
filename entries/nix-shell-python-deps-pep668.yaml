@@ -2,8 +2,8 @@ id: nix-shell-python-deps-pep668
 status: verified
 title: "Run Python + deps on PEP-668/no-pip hosts via one nix-shell command"
 first_seen: "2026-08-21"
-last_confirmed: "2026-08-21"
-confirmation_count: 1
+last_confirmed: "2026-10-05"
+confirmation_count: 2
 
 domain:
   tool: ["nix-shell", "python3"]
@@ -64,7 +64,12 @@ attestations:
     env: "nixos, aarch64"
     date: "2026-08-21"
     result: confirm
-    note: "Ran `nix-shell -p python3Packages.pyyaml python3Packages.requests --run 'python3 -c \"import yaml, requests; print(\"DEPS_OK\")\"'` and observed DEPS_OK; also confirmed `nix-shell -p python3Packages.pyyaml --run 'python3 -c \"import yaml; print(yaml.__version__)\"'` printed 6.0.3."
+    note: "Ran `nix-shell -p python3Packages.pyyaml python3Packages.requests --run 'python3 -c \"import yaml, requests; print(\\\"DEPS_OK\\\")\"'` and observed DEPS_OK; also confirmed `nix-shell -p python3Packages.pyyaml --run 'python3 -c \"import yaml; print(yaml.__version__)\\\"'` printed 6.0.3."
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux"
+    date: "2026-10-05"
+    result: confirm
+    note: "Curation re-run of this entry's repro on an x86_64 NixOS host (first attestation was aarch64): `nix-shell -p python3Packages.pyyaml python3Packages.requests --run 'python3 -c \"import yaml, requests; print(\\\"DEPS_OK\\\")\"'` printed DEPS_OK. Pattern still works on current nixpkgs."
 
 provenance:
   discovered_by: "dbeley@2026-08-21"

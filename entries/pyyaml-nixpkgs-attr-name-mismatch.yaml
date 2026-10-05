@@ -2,8 +2,8 @@ id: pyyaml-nixpkgs-attr-name-mismatch
 status: verified
 title: "nixpkgs: PyYAML's attribute is python3Packages.pyyaml, not .yaml"
 first_seen: "2026-08-21"
-last_confirmed: "2026-08-21"
-confirmation_count: 1
+last_confirmed: "2026-10-05"
+confirmation_count: 2
 
 domain:
   tool: ["nix-shell", "nixpkgs"]
@@ -68,7 +68,12 @@ attestations:
     env: "nixos, aarch64"
     date: "2026-08-21"
     result: confirm
-    note: "Ran `nix-shell -p python3Packages.pyyaml --run 'python3 -c \"import yaml; print(yaml.__version__)\"'` -> printed 6.0.3 (confirm). Tried `nix-shell -p python3Packages.yaml --run true` -> error naming only oyaml/pyaml/yarl/dazl/enaml (confirm the trap)."
+    note: "Ran `nix-shell -p python3Packages.pyyaml --run 'python3 -c \"import yaml; print(yaml.__version__)\\\"'` -> printed 6.0.3 (confirm). Tried `nix-shell -p python3Packages.yaml --run true` -> error naming only oyaml/pyaml/yarl/dazl/enaml (confirm the trap)."
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux"
+    date: "2026-10-05"
+    result: confirm
+    note: "Curation re-run on current nixpkgs: `nix-shell -p python3Packages.pyyaml --run 'python3 -c \"import yaml; print(yaml.__version__)\"'` printed 6.0.3, and `nix-shell -p python3Packages.yaml --run true` still fails with \"error: attribute 'yaml' missing\" — the attribute/import-name mismatch persists."
 
 provenance:
   discovered_by: "dbeley@2026-08-21"
