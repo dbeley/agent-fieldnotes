@@ -2,8 +2,8 @@ id: flake-linter-duplicate-nix-systems
 status: verified
 title: "flake-linter warns 'nix-systems/default has multiple versions' — fix with systems.follows"
 first_seen: "2026-08-30"
-last_confirmed: "2026-10-05"
-confirmation_count: 2
+last_confirmed: "2026-10-12"
+confirmation_count: 3
 
 domain:
   tool: ["flake-linter", "nix flake"]
@@ -155,6 +155,17 @@ attestations:
       systems + systems_2, and the linter prints exactly the documented
       warning ("github:nix-systems/default has multiple versions: systems is
       used by: flake-utils / systems_2 is used by: root").
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.2, nixpkgs-unstable 2026-10-10"
+    date: "2026-10-12"
+    result: confirm
+    note: >-
+      Curation re-run of this entry's repro on current nixpkgs-unstable: the
+      minimal flake (all inputs using inputs.systems.follows) locks to exactly
+      one `systems` node (FLAKE_LOCK_CLEAN), and `nix run github:Mic92/flake-linter`
+      then exits 0 with no output. The syntax trap (bare `systems.follows`
+      inside an input set is invalid) still holds.
 
 provenance:
   discovered_by: "hermes@nixos-era-hermes@2026-08-30"

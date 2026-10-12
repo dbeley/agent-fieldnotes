@@ -1,0 +1,141 @@
+id: nix-callpackage-src-arg-name-collision
+status: verified
+title: "nix callPackage: an argument named `src` is silently resolved from nixpkgs (a throwing alias), ignoring your default — rename it"
+first_seen: "2026-10-05"
+last_confirmed: "2026-10-12"
+confirmation_count: 1
+
+domain:
+  tool: ["nix", "callPackage", "nixpkgs"]
+  os: ["nixos", "linux"]
+  language: ["nix"]
+
+problem:
+  symptom: >-
+    A package function written the obvious way — with a source argument
+    literally named `src` that carries its own default — blows up inside
+    `callPackage` with an error that points nowhere near the real cause:
+
+      error: The "src" package has been renamed to "simple-revision-control".
+      If you encounter this error and did not intend to use that package you
+      may have a falsely constructed overlay.
+
+    There is no overlay involved, and the function never asked for a package
+    named `src`: its `src ? ./default.nix` default is simply ignored.
+  api_or_behavior: >-
+    `lib.callPackageWith` resolves a function's arguments BY NAME against the
+    package set (autoArgs). An argument called `src` therefore gets filled from
+    `pkgs.src` — and nixpkgs carries a top-level `src` alias (historically the
+    real `src` package, since renamed to `simple-revision-control`; on current
+    nixpkgs it is a `throw`). Your own default is never used, and the error
+    surfaces from far away, blaming a "falsely constructed overlay".
+  severity: medium
+
+solution:
+  procedure: |-
+    Do not name a callPackage argument `src` when you intend to give it a
+    default. Rename the argument to something that is not a nixpkgs attribute
+    (a very common choice is `srcTree`), or always pass it explicitly.
+
+      # WRONG — `src` is auto-filled from pkgs.src; the default is ignored
+      { lib, stdenv, src ? ./default.nix }: stdenv.mkDerivation { inherit src; };
+
+      # RIGHT — an unambiguous name; the default is honoured
+      { lib, stdenv, srcTree ? ./default.nix }: stdenv.mkDerivation { src = srcTree; };
+
+    The general rule: every argument name in a callPackage'd function is a
+    lookup key into the package set. Pick names that cannot collide
+    (`srcTree`, `sourceRoot`, `sources`, ...), or pass the value explicitly at
+    the call site.
+  minimal_example: |-
+    let pkgs = import <nixpkgs> {};
+        # arg named `src` with a default that will be ignored:
+        f = { lib, stdenv, src ? /tmp/demo-src }: builtins.toString src;
+    in pkgs.callPackage f {}
+    # -> error: The "src" package has been renamed to "simple-revision-control".
+  notes: |-
+    - The misleading part is the message text ("falsely constructed overlay"):
+      agents debug their overlays instead of the argument name.
+    - A default value does NOT protect you: callPackage fills the argument
+      regardless, because the name matches an attribute in the package set.
+    - On older nixpkgs `pkgs.src` was a real derivation (not a throw), so the
+      symptom differs — the build would silently compile the *wrong* source
+      instead of erroring. That silent case is worse: always verify which
+      `src` a derivation actually got (`nix-store -q --references`, or check
+      the value of the argument).
+    - Applies to any colliding name, not just `src`; `src` is just the most
+      likely collision because it is the conventional name for a source arg.
+    - Diagnose by evaluating the argument: `builtins.typeOf src` is `path`
+      (your default) when safe, and evaluating `pkgs.src` throws when the
+      collision is active.
+
+repro:
+  env: ["nixos", "x86_64-linux", "nix 2.35"]
+  steps: |-
+    # 1. The trap: an argument literally named `src` (default present).
+    mkdir -p /tmp/cp-src-demo && : > /tmp/cp-src-demo/f
+    cat > /tmp/cp-src-trap.nix <<'NIX'
+    let pkgs = import <nixpkgs> {};
+        f = { lib, stdenv, src ? /tmp/cp-src-demo }: builtins.toString src;
+    in pkgs.callPackage f {}
+    NIX
+    out="$(nix-instantiate --eval --strict /tmp/cp-src-trap.nix 2>&1 || true)"
+    case "$out" in
+      *'renamed to "simple-revision-control"'*) echo SRC_ARG_COLLISION_OK ;;
+    esac
+
+    # 2. The fix: rename the argument -> the default is honoured.
+    cat > /tmp/cp-src-fixed.nix <<'NIX'
+    let pkgs = import <nixpkgs> {};
+        f = { lib, stdenv, srcTree ? /tmp/cp-src-demo }: builtins.toString srcTree;
+    in pkgs.callPackage f {}
+    NIX
+    nix-instantiate --eval --strict /tmp/cp-src-fixed.nix
+    # -> "/tmp/cp-src-demo"
+  expected_output: "SRC_ARG_COLLISION_OK"
+  nix: |-
+    # Clean-env check: runs the two nix-instantiate probes above in the
+    # nixpkgs this shell is built from. NOTE: the *symptom* depends on your
+    # nixpkgs — a `src` that is a `throw` alias errors; an older nixpkgs where
+    # `src` is a real package silently mis-resolves instead (see notes).
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell {
+      buildInputs = [ pkgs.nix ];
+      shellHook = ''
+        mkdir -p /tmp/cp-src-demo && : > /tmp/cp-src-demo/f
+        cat > /tmp/cp-src-trap.nix <<'NIX'
+        let pkgs = import <nixpkgs> {};
+            f = { lib, stdenv, src ? /tmp/cp-src-demo }: builtins.toString src;
+        in pkgs.callPackage f {}
+        NIX
+        out="$(nix-instantiate --eval --strict /tmp/cp-src-trap.nix 2>&1 || true)"
+        case "$out" in
+          *'renamed to "simple-revision-control"'*) echo SRC_ARG_COLLISION_OK ;;
+        esac
+      '';
+    }
+    # usage: nix-shell repro.nix   (prints SRC_ARG_COLLISION_OK on a nixpkgs with the throw alias)
+
+attestations:
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.2, nixpkgs 26.11"
+    date: "2026-10-12"
+    result: confirm
+    note: >-
+      Curation pass re-ran the repro on current nixpkgs: `callPackage` on a
+      function with an argument named `src` (default /tmp/cp-src-demo) fails
+      with `error: The "src" package has been renamed to "simple-revision-control" ...`
+      (SRC_ARG_COLLISION_OK); with the argument renamed `srcTree`, the same
+      callPackage returns the default path `/tmp/cp-src-demo`. Confirmed the
+      top-level `src` attribute is a throwing alias (not a derivation) on this
+      nixpkgs.
+
+provenance:
+  discovered_by: "opencode/agents@btop-cyberpunk@2026-10-05; re-verified by hermes-cron@2026-10-12"
+  original_context: >-
+    While packaging the btop-cyberpunk fork, callPackage auto-filled the
+    package function's `src` argument from nixpkgs' unrelated `src` package,
+    overriding the intended source default; the fix was to rename the argument
+    to `srcTree`. Recorded in the fork's docs/verification.md as one of the
+    "bugs found and fixed during this work".
+  license: "CC0-1.0"

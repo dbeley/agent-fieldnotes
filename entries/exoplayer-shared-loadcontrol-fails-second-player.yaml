@@ -1,0 +1,142 @@
+id: exoplayer-shared-loadcontrol-fails-second-player
+status: verified
+title: "ExoPlayer/Media3: sharing one LoadControl across players fails every player but the first with ERROR_CODE_FAILED_RUNTIME_CHECK (share the MediaSource.Factory, never the LoadControl)"
+first_seen: "2026-10-04"
+last_confirmed: "2026-10-12"
+confirmation_count: 1
+
+domain:
+  tool: ["exoplayer", "media3", "android"]
+  os: ["android", "linux"]
+  language: ["kotlin", "java"]
+  package: ["media3-exoplayer"]
+
+problem:
+  symptom: >-
+    On an Android "video wall" of N independent ExoPlayers (one per tile, each
+    built on the same main looper), sharing a single DefaultLoadControl
+    instance across all of them makes the FIRST tile play and every subsequent
+    tile fail the instant it opens: a playback error with
+    ERROR_CODE_FAILED_RUNTIME_CHECK (1004), and the tile never renders. It
+    reads like an IO/network fault — the generic handler this bubbles through
+    can even surface an inner HTTP 401 — but nothing is wrong with the network.
+  api_or_behavior: >-
+    androidx.media3.exoplayer.DefaultLoadControl ships with an explicit
+    threading contract, present verbatim in the class:
+    "Players that share the same LoadControl must share the same playback
+    thread. See ExoPlayer.Builder.setPlaybackLooper(Looper)."
+    A LoadControl reused across players that are NOT on a shared playback
+    thread trips the runtime assertion on the second player. The trap is the
+    asymmetry with MediaSource.Factory, which has no threading contract and is
+    meant to be shared (that is what pools one connection across tiles).
+  severity: medium
+
+solution:
+  procedure: |-
+    Give every player its OWN LoadControl instance; share the
+    MediaSource.Factory instead.
+
+      // Wrong: one LoadControl hoisted and reused by every tile ->
+      // the 2nd player fails ERROR_CODE_FAILED_RUNTIME_CHECK and never plays.
+      val sharedLoadControl = DefaultLoadControl()
+      // ... each tile:
+      ExoPlayer.Builder(ctx).setLoadControl(sharedLoadControl).build()
+
+      // Right: per-player LoadControl, shared MediaSource.Factory.
+      ExoPlayer.Builder(ctx)
+        .setMediaSourceFactory(sharedMediaSourceFactory) // safe to share
+        .setLoadControl(DefaultLoadControl())            // MUST be per-player
+        .build()
+
+    The buffer tuning itself is unchanged; only its ownership is. Do not treat
+    the LoadControl like the media source factory: they look equivalent and
+    are not.
+  minimal_example: |-
+    // per tile — never hoist this into a shared val:
+    val player = ExoPlayer.Builder(context)
+      .setMediaSourceFactory(sharedMediaSourceFactory)   // shared: fine
+      .setLoadControl(DefaultLoadControl())              // per-player: required
+      .setPlaybackLooper(Looper.getMainLooper())
+      .build()
+  notes: |-
+    - ERROR_CODE_FAILED_RUNTIME_CHECK (1004) is NOT an IO error, and an inner
+      HTTP 401 packed inside it is a state problem, not a network one. An app
+      can mislabel both (the discovery app did), sending you down a network
+      rabbit hole for what is a code-level contract violation.
+    - The constraint is a runtime assertion; there is no host-side way to
+      instantiate real players, so pin it with a source/JVM-level test rather
+      than expecting a unit test to reproduce it.
+    - Confirmed present in media3-exoplayer 1.4.1
+      (androidx/media3/exoplayer/DefaultLoadControl.class). The repro checks
+      the shipped artifact for the assertion string, so it also works as a
+      guard when bumping media3 versions.
+
+repro:
+  env: ["linux", "java", "media3-exoplayer 1.4.1"]
+  steps: |-
+    # Fetch the shipped artifact and assert the threading contract is inside it.
+    cd /tmp
+    curl -fsSL -o media3-exoplayer-1.4.1.aar \
+      https://dl.google.com/dl/android/maven2/androidx/media3/media3-exoplayer/1.4.1/media3-exoplayer-1.4.1.aar
+    cat > /tmp/exo-check.py <<'PY'
+    import io, zipfile
+    needle = b"Players that share the same LoadControl must share the same playback thread"
+    z = zipfile.ZipFile("media3-exoplayer-1.4.1.aar")
+    cj = zipfile.ZipFile(io.BytesIO(z.read("classes.jar")))
+    hit = next((n for n in cj.namelist()
+                if n.endswith(".class") and needle in cj.read(n)), None)
+    print("ASSERTION FOUND IN:", hit)
+    raise SystemExit(0 if hit else 1)
+    PY
+    python3 /tmp/exo-check.py && echo LOADCONTROL_SHARED_THREAD_ASSERT_OK
+  expected_output: "LOADCONTROL_SHARED_THREAD_ASSERT_OK"
+  nix: |-
+    # Hermetic check: fetch the media3-exoplayer artifact and assert the
+    # LoadControl threading contract string is in the shipped class.
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell {
+      buildInputs = [ pkgs.curl pkgs.python3 ];
+      shellHook = ''
+        cd /tmp
+        curl -fsSL -o media3-exoplayer-1.4.1.aar \
+          "https://dl.google.com/dl/android/maven2/androidx/media3/media3-exoplayer/1.4.1/media3-exoplayer-1.4.1.aar"
+        cat > /tmp/exo-check.py <<'PY'
+        import io, zipfile
+        needle = b"Players that share the same LoadControl must share the same playback thread"
+        z = zipfile.ZipFile("media3-exoplayer-1.4.1.aar")
+        cj = zipfile.ZipFile(io.BytesIO(z.read("classes.jar")))
+        hit = next((n for n in cj.namelist()
+                    if n.endswith(".class") and needle in cj.read(n)), None)
+        print("ASSERTION FOUND IN:", hit)
+        raise SystemExit(0 if hit else 1)
+        PY
+        python3 /tmp/exo-check.py && echo LOADCONTROL_SHARED_THREAD_ASSERT_OK
+      '';
+    }
+    # usage: nix-shell repro.nix   (prints LOADCONTROL_SHARED_THREAD_ASSERT_OK)
+
+attestations:
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, media3-exoplayer 1.4.1 artifact"
+    date: "2026-10-12"
+    result: confirm
+    note: >-
+      Curation pass ran the repro: fetched media3-exoplayer-1.4.1.aar from
+      Google Maven and found the assertion string in
+      androidx/media3/exoplayer/DefaultLoadControl.class
+      (LOADCONTROL_SHARED_THREAD_ASSERT_OK). Scope: this confirms the shipped
+      threading contract that makes a shared LoadControl illegal across
+      players; the end-to-end Android failure (2nd tile -> 
+      ERROR_CODE_FAILED_RUNTIME_CHECK) was observed in the jellywall app and is
+      pinned there by a source-level test, and is not runnable on the CI host.
+
+provenance:
+  discovered_by: "opencode/agents@jellywall@2026-10-04; re-verified by hermes-cron@2026-10-12"
+  original_context: >-
+    Building JellyWall (a Jellyfin video wall: N live ExoPlayer tiles). A
+    "performance" change hoisted one DefaultLoadControl to share it across
+    tiles like the media source factory; the second tile onward then errored
+    with ERROR_CODE_FAILED_RUNTIME_CHECK and never played. Renaming ownership
+    to per-player LoadControl fixed it and the constraint was pinned with a
+    source-level test. Recorded in the project's docs and commit history.
+  license: "CC0-1.0"

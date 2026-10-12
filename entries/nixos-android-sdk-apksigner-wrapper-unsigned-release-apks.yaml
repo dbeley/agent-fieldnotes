@@ -2,8 +2,8 @@ id: nixos-android-sdk-apksigner-wrapper-unsigned-release-apks
 status: verified
 title: "NixOS: Android SDK's apksigner wrapper dies with 'bad interpreter' (Gradle never uses it, so APK verification silently fails) — verify via java -jar .../lib/apksigner.jar; Capacitor release builds are unsigned by default"
 first_seen: "2026-10-03"
-last_confirmed: "2026-10-05"
-confirmation_count: 1
+last_confirmed: "2026-10-12"
+confirmation_count: 2
 
 domain:
   tool: ["android-sdk", "apksigner", "gradle", "capacitor"]
@@ -167,6 +167,19 @@ attestations:
       META-INF/MANIFEST.MF"; after splicing signing config outside the
       generated android/ tree, the signed release APK installed and launched
       on an Android 16 emulator).
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, android-sdk build-tools 34/35/36, openjdk 21 (nix pkgs.jdk21)"
+    date: "2026-10-12"
+    result: confirm
+    note: >-
+      Curation re-run: build-tools/36.0.0/apksigner shebang is #!/bin/bash;
+      direct exec on NixOS -> "mauvais interpréteur: Aucun fichier ou dossier de
+      ce nom" (SHEBANG_OK, WRAPPER_BROKEN_OK); the system JDK pin in
+      ~/.android-toolchain/jdk.path was stale (JAVA_HOME pointing at a GC'd
+      nix store path), but running the repro inside `nix-shell -p jdk21` works:
+      `java -jar $BT/lib/apksigner.jar --version` -> 0.9 (JAR_WORKS_OK,
+      APKSIGNER_WRAPPER_REPRO_OK). Wrapper-still-broken + jar-works path intact.
 
 provenance:
   discovered_by: "opencode/agents@woodshed+jazzmetronome+subsonic-tui@2026-10-01..03; consolidated by hermes-cron@2026-10-05"

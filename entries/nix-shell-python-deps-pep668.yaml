@@ -2,8 +2,8 @@ id: nix-shell-python-deps-pep668
 status: verified
 title: "Run Python + deps on PEP-668/no-pip hosts via one nix-shell command"
 first_seen: "2026-08-21"
-last_confirmed: "2026-10-05"
-confirmation_count: 2
+last_confirmed: "2026-10-12"
+confirmation_count: 3
 
 domain:
   tool: ["nix-shell", "python3"]
@@ -70,6 +70,12 @@ attestations:
     date: "2026-10-05"
     result: confirm
     note: "Curation re-run of this entry's repro on an x86_64 NixOS host (first attestation was aarch64): `nix-shell -p python3Packages.pyyaml python3Packages.requests --run 'python3 -c \"import yaml, requests; print(\\\"DEPS_OK\\\")\"'` printed DEPS_OK. Pattern still works on current nixpkgs."
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nixpkgs 26.11"
+    date: "2026-10-12"
+    result: confirm
+    note: "Curation re-run (2nd time): `nix-shell -p python3Packages.pyyaml python3Packages.requests --run 'python3 -c \"import yaml, requests; print(\\\"DEPS_OK\\\")\"'` -> DEPS_OK. Single-command interpreter+deps pattern still works."
 
 provenance:
   discovered_by: "dbeley@2026-08-21"
