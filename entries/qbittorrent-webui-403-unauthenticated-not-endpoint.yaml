@@ -1,0 +1,162 @@
+id: qbittorrent-webui-403-unauthenticated-not-endpoint
+status: verified
+title: "qBittorrent WebUI: a bare 403 means \"no session\", not \"endpoint forbidden\" — the auth check runs before the endpoint is looked up"
+first_seen: "2026-10-12"
+last_confirmed: "2026-10-19"
+confirmation_count: 1
+
+domain:
+  tool: ["qbittorrent", "qbittorrent-nox", "webui", "rest-api", "curl"]
+  os: ["linux", "nixos", "darwin"]
+  language: ["python", "bash", "http"]
+  package: ["qbittorrent"]
+
+problem:
+  symptom: >-
+    A client driving the qBittorrent WebUI API reads fine (GET
+    /api/v2/torrents/info returns torrents) and then every state-changing call
+    — POST /api/v2/torrents/pause, /resume, /recheck — comes back
+    `403 Forbidden` with an EMPTY body, for every torrent. It reads as "this
+    account may not pause" or "pause is blocked on this instance", so you go
+    hunting for WebUI permissions, IP bans, or a reverse proxy in front of the
+    port; none of it exists and none of it is the cause.
+  api_or_behavior: >-
+    qBittorrent 5.x (verified against tag release-5.2.3, src/webui/
+    webapplication.cpp) resolves the API scope/action by regex and THEN does:
+
+        // Check public/private scope
+        if (!session() && !isPublicAPI(scope, action))
+            throw ForbiddenHTTPError();
+
+    ...and only afterwards looks up the APIController
+    (`controller = session()->getAPIController(scope);`). So the unauthenticated
+    check precedes routing: an unauthenticated request to ANY private endpoint
+    answers a bare 403 — including an endpoint that does not exist. The status
+    carries no information about the endpoint you called. Related statuses in
+    the same function are distinct: a CSRF failure raises 401 (Unauthorized),
+    a wrong HTTP method raises 405, and the "banned after too many failed
+    authentication attempts" 403 is thrown WITH a message body — the
+    pre-routing 403 is empty.
+  severity: medium
+
+solution:
+  procedure: |
+    Read a bare 403 as "the WebUI did not accept my session", and fix the
+    session, never the endpoint. In 5.x:
+
+      - `POST /api/v2/auth/login` (declared public) answers **204 with an
+        EMPTY body** on success. Any action whose handler returns no data is
+        answered 204 by the generic dispatcher (`status(204)` in
+        doProcessRequest), so the legacy `200 "Ok."` login body is gone and
+        asserting `body == "Ok."` makes a working login look failed.
+      - the session cookie is named `QBT_SID_<port>` — the constant prefix
+        `QBT_SID_` concatenated with the WebUI port — NOT `SID`. Capture it
+        from the login response `Set-Cookie` and send it back verbatim.
+      - with CSRF protection on, send the same `Origin`/`Referer` the WebUI
+        uses; a mismatch is a 401, so a 403 is not a CSRF complaint.
+
+    Differential test that settles it in two requests: call a private endpoint
+    that cannot exist. If it 403s too, you are unauthenticated (the endpoint is
+    irrelevant). If it 404s, your session is accepted and the 403/404 really is
+    about that endpoint.
+  minimal_example: |
+    # same call twice, second one to a nonexistent action:
+    curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+      -H "Referer: http://127.0.0.1:8080" \
+      "http://127.0.0.1:8080/api/v2/torrents/pause?hashes=all"        # -> 403
+    curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+      -H "Referer: http://127.0.0.1:8080" \
+      "http://127.0.0.1:8080/api/v2/torrents/definitelyNotAnAction"  # -> 403 too
+    # both 403 => the request arrived unauthenticated; the endpoint never ran
+  notes: |-
+    - Only `auth/login` and the `app/` endpoints are public
+      (`declarePublicAPI(u"auth/login"_s)`); every other scope/action needs a
+      session, so "works for GET, 403 for POST" usually means the cookie was
+      not carried on the POST, not that POST is forbidden.
+    - A client that checks `response.text == "Ok."` after login logs in
+      successfully and then discards the cookie — the classic way to end up in
+      exactly this state.
+    - 403 with a body = ban message; 403 with an empty body = no session.
+    - Method filtering happens after the session check, so 405 is only
+      reachable once you ARE authenticated: seeing 405 proves the session is
+      fine.
+
+repro:
+  env: ["any os", "curl", "python3", "network access to raw.githubusercontent.com"]
+  steps: |
+    # Source-level check: the *ordering* of the check is the finding.
+    cd /tmp
+    curl -fsSL -o qb-webapplication.cpp \
+      https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.3/src/webui/webapplication.cpp
+    python3 - <<'PY'
+    src = open("qb-webapplication.cpp").read()
+    # 1. the unauthenticated 403 is thrown before the controller is resolved
+    i403 = src.index("if (!session() && !isPublicAPI(scope, action))")
+    iroute = src.index("session()->getAPIController(scope)")
+    assert i403 < iroute, "403 check must precede endpoint lookup"
+    # and it throws a bare forbidden, empty body
+    assert "throw ForbiddenHTTPError();" in src[i403:i403 + 200]
+    # 2. cookie name is the prefix + the WebUI port
+    assert 'SESSION_COOKIE_NAME_PREFIX = u"QBT_SID_"' in src
+    j = src.index("m_sessionCookieName = SESSION_COOKIE_NAME_PREFIX")
+    assert "getWebUIPort()" in src[j:j + 160]
+    # 3. empty-result actions are answered 204 (login body is empty in 5.x)
+    assert "status(204)" in src
+    print("QBIT_403_BEFORE_ROUTING_OK")
+    PY
+    # Manual reading, if you want the lines printed:
+    grep -n -A1 'if (!session() && !isPublicAPI' qb-webapplication.cpp
+    grep -n -A2 'm_sessionCookieName = SESSION_COOKIE_NAME_PREFIX' qb-webapplication.cpp
+  expected_output: "QBIT_403_BEFORE_ROUTING_OK"
+  nix: |-
+    # Clean-env source check (no qBittorrent instance needed).
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell {
+      buildInputs = [ pkgs.curl pkgs.python3 ];
+      shellHook = ''
+        cd /tmp
+        curl -fsSL -o qb-webapplication.cpp \
+          https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.3/src/webui/webapplication.cpp
+        python3 - <<'PY'
+        src = open("qb-webapplication.cpp").read()
+        i403 = src.index("if (!session() && !isPublicAPI(scope, action))")
+        iroute = src.index("session()->getAPIController(scope)")
+        assert i403 < iroute
+        assert 'SESSION_COOKIE_NAME_PREFIX = u"QBT_SID_"' in src
+        assert "status(204)" in src
+        print("QBIT_403_BEFORE_ROUTING_OK")
+        PY
+      '';
+    }
+    # usage: nix-shell repro.nix  (prints QBIT_403_BEFORE_ROUTING_OK)
+
+attestations:
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, curl; qBittorrent release-5.2.3 source"
+    date: "2026-10-19"
+    result: confirm
+    note: >-
+      Curation pass ran the repro: fetched src/webui/webapplication.cpp at tag
+      release-5.2.3 and asserted the ordering — the bare
+      `if (!session() && !isPublicAPI(scope, action)) throw
+      ForbiddenHTTPError();` sits immediately after the scope/action regex
+      match and 7 lines BEFORE `session()->getAPIController(scope)`, so an
+      unauthenticated request to a nonexistent private action also 403s
+      (QBIT_403_BEFORE_ROUTING_OK). Also confirmed from source:
+      `SESSION_COOKIE_NAME_PREFIX = u"QBT_SID_"` combined with
+      `pref->getWebUIPort()`, and the generic `status(204)` for null results
+      (the empty login body). Scope: the live end-to-end signature (403 on
+      /torrents/pause with a session-free client, planning GETs working) was
+      observed while building an archive.org torrent reviver against a local
+      qBittorrent 5.2.3; the source assertions above are what this repro pins.
+
+provenance:
+  discovered_by: "hermes@2026-10-12 (archive-org torrent reviver session); source-pinned by hermes-cron@2026-10-19"
+  original_context: >-
+    While building ia-reviver (a tool that fills zero-seeder archive.org
+    torrents from archive.org and forces a recheck in qBittorrent), a revive run
+    failed on every torrent with `failed: HTTP 403 on POST /api/v2/torrents/pause:
+    Forbidden`, while planning (plain GETs) worked. The diagnosis came from
+    reading qbittorrent's webapplication.cpp rather than from any documentation:
+    the 403 is the unauthenticated gate, not a permission on `pause`.
+  license: "CC0-1.0"

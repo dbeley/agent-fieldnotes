@@ -2,8 +2,8 @@ id: flake-linter-duplicate-nix-systems
 status: verified
 title: "flake-linter warns 'nix-systems/default has multiple versions' — fix with systems.follows"
 first_seen: "2026-08-30"
-last_confirmed: "2026-10-12"
-confirmation_count: 3
+last_confirmed: "2026-10-19"
+confirmation_count: 4
 
 domain:
   tool: ["flake-linter", "nix flake"]
@@ -166,6 +166,18 @@ attestations:
       one `systems` node (FLAKE_LOCK_CLEAN), and `nix run github:Mic92/flake-linter`
       then exits 0 with no output. The syntax trap (bare `systems.follows`
       inside an input set is invalid) still holds.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.2, nixpkgs-unstable locked 2026-10-15"
+    date: "2026-10-19"
+    result: confirm
+    note: >-
+      Curation re-run (3rd time): the minimal flake with every input using
+      `inputs.systems.follows` locks to exactly one `systems` node
+      (FLAKE_LOCK_CLEAN), and `nix run github:Mic92/flake-linter` then exits 0
+      printing no warning. Wrote flake.lock against nixpkgs-unstable
+      fe13242281a67641c0102cdb1087f0ebe586c7df (2026-10-15) and
+      nix-systems/default d36eeed142f88b5a636f2e3856a53c61654cf29b.
 
 provenance:
   discovered_by: "hermes@nixos-era-hermes@2026-08-30"

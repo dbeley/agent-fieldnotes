@@ -1,0 +1,132 @@
+id: gha-scheduled-workflow-disabled-inactivity
+status: verified
+title: "A scheduled GitHub Actions workflow stops silently: GitHub disables it after 60 days without repo activity (`disabled_inactivity`), and pushing code does not re-enable it"
+first_seen: "2026-10-12"
+last_confirmed: "2026-10-19"
+confirmation_count: 1
+
+domain:
+  tool: ["github-actions", "gh", "gh-api"]
+  os: ["linux", "nixos", "darwin"]
+  language: ["yaml", "bash"]
+
+problem:
+  symptom: >-
+    A cron-style workflow (`on: schedule:`) that refreshes data (scrapes an
+    API, regenerates a site, commits the result) simply stops running: the
+    deployed site still serves months-old data, but the Actions tab shows no
+    failed run, no red X, nothing — the schedule is dead, not broken. The last
+    run of that workflow is months in the past.
+  api_or_behavior: >-
+    GitHub Actions auto-disables **scheduled** workflows in a repository that
+    has had no activity (no push/commit) for 60 days. The workflow is not
+    reported as failed: its state becomes `disabled_inactivity`, visible via
+    `GET /repos/{owner}/{repo}/actions/workflows` (`.state`, values
+    `active` / `disabled_inactivity` / `disabled_manually`), and the UI shows a
+    "This scheduled workflow is disabled because there hasn't been any
+    repository activity" banner with an "Enable workflow" button. A push does
+    NOT re-enable it — re-enabling is an explicit user/API action. The failure
+    is therefore self-reinforcing: the only thing that would have produced
+    activity (the job's auto-commit) is exactly what got disabled.
+  severity: medium
+
+solution:
+  procedure: |
+    Diagnose first — a workflow that "stopped updating" is often a *chain*:
+    the job broke (a bug, an expired token), so no commit landed for 60 days,
+    so GitHub disabled the schedule. Fixing the code alone will not restart it.
+
+      # 1. is it scheduled at all? look at the STATE, not the runs:
+      gh api repos/OWNER/REPO/actions/workflows \
+        --jq '.workflows[] | "\(.name)\t\(.state)"'
+      #    active                -> the schedule is alive; debug the job
+      #    disabled_inactivity   -> GitHub turned it off (this entry)
+      #    disabled_manually     -> a human/API turned it off
+
+      # 2. confirm nothing ran: an empty list means it never even dispatched
+      gh run list -R OWNER/REPO --workflow refresh-data.yml --limit 5
+
+      # 3. re-enable it (idempotent), by file name or by id:
+      gh workflow enable refresh-data.yml -R OWNER/REPO
+      gh api -X PUT repos/OWNER/REPO/actions/workflows/<workflow-id>/enable
+
+      # 4. break the loop: the job must actually COMMIT on success (the
+      #    auto-commit is the activity that keeps the schedule alive). If the
+      #    job is legitimately quiet for long stretches, add a keepalive
+      #    (a tiny committed timestamp, or a monthly no-op commit).
+
+    Note `gh workflow enable` acts on the workflow *file*; renaming/moving the
+    file creates a new workflow with a fresh state, which also "fixes" it once
+    but loses the run history.
+  minimal_example: |
+    gh api repos/dbeley/my-steam-library/actions/workflows \
+      --jq '.workflows[] | "\(.name)\t\(.state)"'
+    # refresh-data	disabled_inactivity
+    # pages-build-deployment	active
+    gh workflow enable refresh_data.yaml -R dbeley/my-steam-library
+  notes: |-
+    - `disabled_inactivity` is invisible to every check that looks at run
+      conclusions: there is nothing to see because nothing ran. Always read the
+      workflow state, not the run list.
+    - The 60-day clock counts repository activity (commits), not workflow runs,
+      and it is a fixed platform rule — no config in the workflow file opts out.
+    - Scheduled workflows are also only created/updated on the default branch,
+      so a `schedule:` added on a branch does nothing until it is on `main`.
+    - After re-enabling, expect the FIRST run at the next cron instant, not
+      immediately; use `gh workflow run <file>` to trigger it now.
+
+repro:
+  env: ["any os", "gh CLI authenticated (read access to the repo)"]
+  steps: |
+    # The example repo is dbeley/my-steam-library, whose refresh-data workflow
+    # was disabled after its scheduled job broke and stopped committing.
+    # Any repo in this exact state gives the same output; to find your own:
+    #   for r in $(gh api /user/repos --paginate --jq '.[].full_name'); do
+    #     gh api "repos/$r/actions/workflows" \
+    #       --jq ".workflows[] | select(.state==\"disabled_inactivity\") | \"$r \(.name)\""
+    #   done
+    state=$(gh api repos/dbeley/my-steam-library/actions/workflows \
+              --jq '.workflows[] | select(.name=="refresh-data") | .state')
+    echo "state=$state"
+    test "$state" = "disabled_inactivity" && echo "DISABLED_INACTIVITY_FOUND"
+    # and: the workflow has no recent runs at all
+    gh run list -R dbeley/my-steam-library --limit 3 --json name,status,createdAt \
+      --jq '.[] | "\(.name)\t\(.status)\t\(.createdAt)"'
+  expected_output: "DISABLED_INACTIVITY_FOUND"
+  nix: |-
+    # Clean-env check: needs an authenticated `gh` (GH_TOKEN in the env).
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell {
+      buildInputs = [ pkgs.gh pkgs.jq ];
+      shellHook = ''
+        state=$(gh api repos/dbeley/my-steam-library/actions/workflows \
+                  --jq '.workflows[] | select(.name=="refresh-data") | .state')
+        echo "state=$state"
+        test "$state" = "disabled_inactivity" && echo "DISABLED_INACTIVITY_FOUND"
+      '';
+    }
+    # usage: GH_TOKEN=... nix-shell repro.nix  (prints DISABLED_INACTIVITY_FOUND)
+
+attestations:
+  - agent: "hermes-cron@hermes-vm"
+    env: "linux, gh CLI authenticated as dbeley"
+    date: "2026-10-19"
+    result: confirm
+    note: >-
+      Curation pass ran the repro: `gh api repos/dbeley/my-steam-library/actions/workflows`
+      reports refresh-data state=`disabled_inactivity` (while
+      pages-build-deployment is `active`), same repo where the scheduled job had
+      stopped committing after a `--export_filename` regression — i.e. the
+      "job breaks, then silence disables the schedule" chain reproduced here.
+
+provenance:
+  discovered_by: "hermes@2026-10-12 (stale-data triage across dbeley/steam_stats + my-steam-library); re-verified by hermes-cron@2026-10-19"
+  original_context: >-
+    Investigating why dbeley/steam_stats data had not moved for months. The
+    library repo's weekly refresh action cloned steam_stats and ran it; a
+    1.2 refactor changed --export_filename to append `.csv` unconditionally, so
+    the consumer step died on `game_info.csv` (9 consecutive failures from
+    2026-07-06), no commit ever landed, and GitHub then disabled the schedule
+    with disabled_inactivity — so the code fix alone would not have restarted
+    the pipeline.
+  license: "CC0-1.0"

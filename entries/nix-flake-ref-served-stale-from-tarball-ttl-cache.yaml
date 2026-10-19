@@ -1,0 +1,147 @@
+id: nix-flake-ref-served-stale-from-tarball-ttl-cache
+status: verified
+title: "`nix run github:owner/repo` keeps building the previous commit for up to tarball-ttl (3600 s): the ref resolution is cached in fetcher-cache-v4.sqlite"
+first_seen: "2026-10-14"
+last_confirmed: "2026-10-19"
+confirmation_count: 1
+
+domain:
+  tool: ["nix", "nix run", "nix shell", "nix build", "nix flake"]
+  os: ["nixos", "linux", "darwin"]
+  language: ["bash"]
+
+problem:
+  symptom: >-
+    After pushing new commits to a repo, `nix run github:owner/repo` (and
+    `nix shell`/`nix build`/`nix flake metadata` on the same flake ref) keeps
+    fetching/building the OLD revision — sometimes for up to an hour — with no
+    warning and a fully successful build. Pinned `--flake .#x`, a `nix flake
+    update`, and even a store GC do not help, because the flake is not in a
+    lock file: it is a *floating ref* resolved on every invocation.
+  api_or_behavior: >-
+    Nix resolves a floating ref (`github:owner/repo`, `github:o/r/ref`) by
+    calling the GitHub API (`https://api.github.com/repos/owner/repo/commits/HEAD`)
+    and caches that answer — URL, ETag and timestamp — in
+    `~/.cache/nix/fetcher-cache-v4.sqlite` (table `Cache(domain, key, value,
+    timestamp)`, domain `file`), before consulting the eval cache
+    (`~/.cache/nix/eval-cache-v6`, which merely follows the revision that was
+    resolved). While the cache entry is younger than `tarball-ttl` (default
+    **3600 s**) nix does not revalidate it: the resolution is served entirely
+    from the local cache, so a `nix run` of a ref you just pushed is not stale
+    because of the store or the eval cache but because the *ref resolution*
+    never left the machine.
+  severity: medium
+
+solution:
+  procedure: |
+    Three remedies, cheapest first:
+
+      # 1. per-invocation: force tarball-ttl=0. Present on nix run, nix shell,
+      #    nix build and nix flake metadata.
+      nix run --refresh github:owner/repo
+
+      # 2. permanent (flake-based NixOS): set it in your config, e.g.
+      #    nix.settings.tarball-ttl = 0;  then rebuild.
+      #    Cost: one GitHub API call per invocation; nix sends the stored ETag,
+      #    GitHub answers 304 Not Modified, so the unauthenticated 60 req/h
+      #    quota is not consumed.
+
+      # 3. deterministic: pin the revision, no resolution at all.
+      nix run github:owner/repo/<full-40-char-rev>
+
+    Do NOT edit /etc/nix/nix.conf on a flake-based host: it is regenerated from
+    nix.settings at every rebuild, so the edit silently disappears.
+  minimal_example: |
+    nix run --refresh github:owner/repo            # this invocation only
+    nix run github:owner/repo/b957e3bf6358b1dcb099f510eb665b6ebbc4b270  # pinned
+  notes: |-
+    - The second-order trap, measured on 2026-10-19: when the network is
+      unavailable, `--refresh` does NOT fail — it prints
+      `warning: unable to download '.../commits/HEAD' ... retrying (attempt 1/3)`,
+      then `... using cached version`, and **exits 0** with the stale revision.
+      So a green `--refresh` run does not prove you revalidated; the warning
+      line is the only tell. If your verification of "I am running the latest
+      code" relies on the exit status of a `--refresh` invocation, it is not a
+      verification.
+    - A no-op `--refresh` can also mean HEAD simply has not moved (the pinned
+      revision is unchanged) — compare `nix flake metadata --json | .revision`
+      against the real HEAD (`gh api repos/owner/repo/commits/HEAD --jq .sha`)
+      instead of inferring from the command succeeding.
+    - The cache is per-invocation-URL: warming `commits/HEAD` does not warm
+      `commits/main`. The entry's age is readable straight from the sqlite file
+      (`select datetime(timestamp,'unixepoch'), key from Cache where key like
+      '%/commits/%'`), which is the fastest way to prove you are inside the TTL
+      window.
+    - `tarball-ttl` also governs the tarball cache used by
+      `https://github.com/.../archive/...` style URLs — the same knob, the same
+      one-hour staleness.
+
+repro:
+  env: ["nixos, x86_64-linux", "nix 2.35.2", "network", "~/.cache/nix/fetcher-cache-v4.sqlite"]
+  steps: |
+    # Differential test. A dead proxy stands in for "no network": whatever
+    # still succeeds is being served from the local cache.
+    DEAD=http://127.0.0.1:9
+
+    echo "tarball_ttl=$(nix config show tarball-ttl)"     # -> 3600
+    nix flake metadata --json github:dbeley/autoscreen >/dev/null 2>&1  # warm
+
+    # 1. WITHOUT --refresh, no download is attempted at all:
+    HTTPS_PROXY=$DEAD https_proxy=$DEAD \
+      nix flake metadata --json github:dbeley/autoscreen >/tmp/plain.log 2>&1
+    grep -q "unable to download" /tmp/plain.log \
+      && echo "PLAIN_REVALIDATED" || echo "PLAIN_SERVED_FROM_CACHE"
+
+    # 2. WITH --refresh the same call must reach api.github.com:
+    HTTPS_PROXY=$DEAD https_proxy=$DEAD \
+      nix flake metadata --refresh --json github:dbeley/autoscreen >/tmp/refresh.log 2>&1
+    grep -q "commits/HEAD" /tmp/refresh.log && echo "REFRESH_REVALIDATES"
+    # note: --refresh still EXITS 0 here (it falls back, "using cached version")
+  expected_output: "PLAIN_SERVED_FROM_CACHE"
+  nix: |-
+    # Clean-env re-run of the differential. Needs nix + network in the shell.
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell {
+      buildInputs = [ pkgs.nix ];
+      shellHook = ''
+        DEAD=http://127.0.0.1:9
+        echo "tarball_ttl=$(nix config show tarball-ttl)"
+        nix flake metadata --json github:dbeley/autoscreen >/dev/null 2>&1
+        HTTPS_PROXY=$DEAD https_proxy=$DEAD \
+          nix flake metadata --json github:dbeley/autoscreen >/tmp/plain.log 2>&1
+        grep -q "unable to download" /tmp/plain.log \
+          && echo "PLAIN_REVALIDATED" || echo "PLAIN_SERVED_FROM_CACHE"
+        HTTPS_PROXY=$DEAD https_proxy=$DEAD \
+          nix flake metadata --refresh --json github:dbeley/autoscreen >/tmp/refresh.log 2>&1
+        grep -q "commits/HEAD" /tmp/refresh.log && echo "REFRESH_REVALIDATES"
+      '';
+    }
+    # usage: nix-shell repro.nix  (prints PLAIN_SERVED_FROM_CACHE then REFRESH_REVALIDATES)
+
+attestations:
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.2, tarball-ttl=3600, dead-proxy isolation"
+    date: "2026-10-19"
+    result: confirm
+    note: >-
+      Curation pass re-ran the differential on the current nix: with
+      HTTPS_PROXY/https_proxy pointed at a dead port, the plain
+      `nix flake metadata --json github:dbeley/autoscreen` exited 0 and its log
+      contained NO "unable to download" line (PLAIN_SERVED_FROM_CACHE: served
+      entirely from ~/.cache/nix/fetcher-cache-v4.sqlite), while the same call
+      with `--refresh` logged
+      `unable to download 'https://api.github.com/repos/dbeley/autoscreen/commits/HEAD' ...
+      retrying (attempt 1/3)` and then `using cached version`, exiting 0
+      (REFRESH_REVALIDATES). This confirms both the cached ref resolution and
+      the exit-status trap noted in `solution.notes`.
+
+provenance:
+  discovered_by: "hermes@2026-10-14 (user report: `nix run` takes a cached version)"
+  original_context: >-
+    User asked why `nix run github-repo` sometimes builds a cached revision
+    instead of the latest commits. Diagnosis on the host (nix 2.35.2, tarball-ttl
+    3600) traced it to the fetcher-cache sqlite holding the GitHub
+    `commits/HEAD` response with its ETag, proved by cutting the network and
+    comparing plain vs `--refresh` invocations. Re-verified on 2026-10-19, which
+    also surfaced that `--refresh` degrades to the cache and still exits 0.
+  license: "CC0-1.0"

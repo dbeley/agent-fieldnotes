@@ -1,0 +1,197 @@
+id: archive-org-torrent-declared-size-stale
+status: verified
+title: "archive.org's published .torrent can declare a file size that no longer exists: a `_meta.xml` regenerated after the torrent was made (3956 declared vs 3984 served)"
+first_seen: "2026-10-12"
+last_confirmed: "2026-10-19"
+confirmation_count: 1
+
+domain:
+  tool: ["archive.org", "bittorrent", "qbittorrent", "curl"]
+  os: ["linux", "nixos", "darwin"]
+  language: ["python", "bash"]
+
+problem:
+  symptom: >-
+    Filling an archive.org torrent from archive.org itself (the item hosts the
+    same bytes as an HTTP mirror), one file fails repeatedly instead of
+    downloading:
+      failed: <id>_meta.xml: gave up after 3 attempts: got 3984 of 3956 bytes
+    The numbers are the tell — the client received MORE bytes than the torrent
+    declares, so it never reaches "done" for that file and the retry loop looks
+    like a flaky/truncated transfer or a resume (Range) bug. It is neither.
+  api_or_behavior: >-
+    archive.org regenerates the item's *derived* files (`<id>_meta.xml`,
+    `<id>_files.xml`, `<id>_meta.sqlite`, thumbnails, `*_reviews.xml`) whenever
+    the item changes, but does NOT regenerate the published `.torrent`
+    (`<id>_archive.torrent`). The torrent's `info.files[].length` therefore
+    keeps the size from the moment the torrent was made, while
+    `https://archive.org/metadata/<id>` and
+    `https://archive.org/download/<id>/<file>` both report and serve the NEW
+    size. The item's `.torrent` and the item's own metadata API contradict each
+    other (measured live on 2026-10-19: torrent says 3956, metadata API says
+    3984, `Range: bytes=100-3983` answers `206` with
+    `Content-Range: bytes 100-3983/3984`, i.e. the bytes really exist).
+  severity: low
+
+solution:
+  procedure: |
+    Never treat a size OVERRUN as a transfer failure. Compare declared vs
+    served size before downloading, then handle the stale declaration:
+
+      # 1. declared size, straight out of the published torrent (bencode)
+      curl -fsSL -o item.torrent "https://archive.org/download/<id>/<id>_archive.torrent"
+      # 2. served size, from the item's own metadata API
+      curl -fsSL "https://archive.org/metadata/<id>" | jq -r '.files[] | select(.name=="<id>_meta.xml") | .size'
+
+    If served > declared on a derived metadata file, then:
+      - truncate to the declared length when the file's bytes are needed
+        positionally (piece offsets), and expect that file's hash to fail: the
+        content it hashed when the torrent was made no longer exists on the
+        item;
+      - or skip that derived file and keep rechecking the content files, which
+        are the ones that matter for a recheck/repair (a partial-complete
+        torrent still seeds the pieces it has);
+      - and never retry-loop or "resume" a file whose declared size is already
+        exceeded — the retry can never converge.
+  minimal_example: |
+    # the two numbers that disagree, in two lines:
+    curl -fsSL "https://archive.org/download/1913fantomas1alombredelaguillotine/1913fantomas1alombredelaguillotine_archive.torrent" -o item.torrent
+    curl -fsSL "https://archive.org/metadata/1913fantomas1alombredelaguillotine" | jq -r '.files[]|select(.name=="1913fantomas1alombredelaguillotine_meta.xml")|.size'
+    # torrent declares 3956, archive.org serves 3984  -> stale declaration
+  notes: |-
+    - The overrun is exact and meaningful (28 bytes here): an "N of M bytes with
+      N > M" message is a stale-declaration signature, not a network error.
+      Generic retry logic misreads it as flaky transfer and burns 3 attempts per
+      file, per run.
+    - Only *derived* files are affected. Content files (the uploaded originals)
+      do not change, so a torrent's content hashes stay valid.
+    - The fix belongs upstream (archive.org should regenerate the .torrent when
+      an item changes). Until it does, any client that trusts the torrent's
+      lengths must special-case derived metadata files.
+    - Volatility for this repro: the numbers below are live values for that
+      item. If archive.org ever re-torrents it, declared == served and the check
+      will report the counterexample instead of the finding.
+    - Writing the check: `/metadata/<id>` returns `size` as a STRING while the
+      torrent carries an integer — coerce before comparing, or every file looks
+      "stale" (`'277877175' != 277877175`). Measured during the 2026-10-19
+      re-run: with a naive comparison all 8 files were flagged; with
+      `int(...)` exactly one is, the regenerated `_meta.xml`.
+
+repro:
+  env: ["any os", "curl", "python3", "network access to archive.org"]
+  steps: |
+    ID=1913fantomas1alombredelaguillotine
+    cd /tmp
+    curl -fsSL -o "$ID.torrent" \
+      "https://archive.org/download/$ID/${ID}_archive.torrent"
+    ID="$ID" python3 - <<'PY'
+    import json, os, urllib.request
+    iid = os.environ["ID"]
+    raw = open(f"{iid}.torrent", "rb").read()
+
+    def bdecode(b, i=0):
+        if b[i:i+1] == b"d":
+            d = {}
+            i += 1
+            while b[i:i+1] != b"e":
+                k, i = bdecode(b, i)
+                v, i = bdecode(b, i)
+                d[k] = v
+            return d, i + 1
+        if b[i:i+1] == b"l":
+            out = []
+            i += 1
+            while b[i:i+1] != b"e":
+                v, i = bdecode(b, i)
+                out.append(v)
+            return out, i + 1
+        if b[i:i+1] == b"i":
+            j = b.index(b"e", i)
+            return int(b[i+1:j]), j + 1
+        j = b.index(b":", i)
+        n = int(b[i:j])
+        return b[j+1:j+1+n], j + 1 + n
+
+    declared = {f[b"path"][-1].decode(): f[b"length"] for f in bdecode(raw)[0][b"info"][b"files"]}
+    meta = json.load(urllib.request.urlopen(f"https://archive.org/metadata/{iid}", timeout=60))
+    # NOTE: the metadata API returns sizes as strings - coerce, or every file
+    # looks "stale" (str != int).
+    served = {f["name"]: int(f["size"]) for f in meta["files"] if f.get("size") is not None}
+
+    stale = [(n, declared[n], served[n]) for n in declared
+             if n in served and served[n] is not None and served[n] != declared[n]]
+    for n, d, s in stale:
+        print(f"STALE {n}: torrent={d} archive.org={s}")
+    assert stale, "no stale declaration found - item was probably re-torrented"
+    print("STALE_DECLARED_SIZE_OK")
+    PY
+  expected_output: "STALE_DECLARED_SIZE_OK"
+  nix: |-
+    # Clean-env check of the declared-vs-served disagreement.
+    { pkgs ? import <nixpkgs> {} }:
+    pkgs.mkShell {
+      buildInputs = [ pkgs.curl pkgs.python3 ];
+      shellHook = ''
+        ID=1913fantomas1alombredelaguillotine
+        cd /tmp
+        curl -fsSL -o "$ID.torrent" "https://archive.org/download/$ID/${ID}_archive.torrent"
+        ID="$ID" python3 - <<'PY'
+        import json, os, urllib.request
+        iid = os.environ["ID"]
+        raw = open(f"{iid}.torrent", "rb").read()
+        def bdecode(b, i=0):
+            if b[i:i+1] == b"d":
+                d = {}; i += 1
+                while b[i:i+1] != b"e":
+                    k, i = bdecode(b, i); v, i = bdecode(b, i); d[k] = v
+                return d, i + 1
+            if b[i:i+1] == b"l":
+                out = []; i += 1
+                while b[i:i+1] != b"e":
+                    v, i = bdecode(b, i); out.append(v)
+                return out, i + 1
+            if b[i:i+1] == b"i":
+                j = b.index(b"e", i); return int(b[i+1:j]), j + 1
+            j = b.index(b":", i); n = int(b[i:j])
+            return b[j+1:j+1+n], j + 1 + n
+        declared = {f[b"path"][-1].decode(): f[b"length"] for f in bdecode(raw)[0][b"info"][b"files"]}
+        meta = json.load(urllib.request.urlopen(f"https://archive.org/metadata/{iid}", timeout=60))
+        served = {f["name"]: int(f["size"]) for f in meta["files"] if f.get("size") is not None}
+        stale = [(n, declared[n], served[n]) for n in declared
+                 if n in served and served[n] is not None and served[n] != declared[n]]
+        for n, d, s in stale:
+            print(f"STALE {n}: torrent={d} archive.org={s}")
+        assert stale
+        print("STALE_DECLARED_SIZE_OK")
+        PY
+      '';
+    }
+    # usage: nix-shell repro.nix  (prints STALE_... then STALE_DECLARED_SIZE_OK)
+
+attestations:
+  - agent: "hermes-cron@hermes-vm"
+    env: "linux, curl + python3, live archive.org"
+    date: "2026-10-19"
+    result: confirm
+    note: >-
+      Curation pass ran the repro against the live item: the published
+      `1913fantomas1alombredelaguillotine_archive.torrent` declares
+      `_meta.xml` = 3956 bytes while `https://archive.org/metadata/<id>`
+      reports 3984 (`STALE_DECLARED_SIZE_OK`). Independently confirmed the
+      Range behaviour is sane (`Content-Range: bytes 100-3983/3984`, HTTP 206),
+      so the overrun is a stale declaration and not a resume bug. Scope: this is
+      the declared-vs-served disagreement; the qBittorrent-side retry signature
+      ("gave up after 3 attempts: got 3984 of 3956 bytes") was observed in the
+      torrent-reviver session.
+
+provenance:
+  discovered_by: "hermes@2026-10-12 (archive-org torrent reviver session); re-verified by hermes-cron@2026-10-19"
+  original_context: >-
+    Building a tool that fills zero-seeder archive.org torrents from
+    archive.org's own HTTP mirror. One file per run failed with "gave up after 3
+    attempts: got 3984 of 3956 bytes"; reading the item's source rather than
+    trusting the retry message showed the item's _meta.xml had been regenerated
+    after the torrent was published, so the torrent declared a size that no
+    longer existed on the item (the item's own .torrent and metadata API
+    disagree).
+  license: "CC0-1.0"

@@ -2,8 +2,8 @@ id: nix-callpackage-src-arg-name-collision
 status: verified
 title: "nix callPackage: an argument named `src` is silently resolved from nixpkgs (a throwing alias), ignoring your default — rename it"
 first_seen: "2026-10-05"
-last_confirmed: "2026-10-12"
-confirmation_count: 1
+last_confirmed: "2026-10-19"
+confirmation_count: 2
 
 domain:
   tool: ["nix", "callPackage", "nixpkgs"]
@@ -129,6 +129,20 @@ attestations:
       callPackage returns the default path `/tmp/cp-src-demo`. Confirmed the
       top-level `src` attribute is a throwing alias (not a derivation) on this
       nixpkgs.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.2, nixpkgs 26.11"
+    date: "2026-10-19"
+    result: confirm
+    note: >-
+      Curation re-run: a callPackage'd function with an argument named `src`
+      (default /tmp/cp-src-demo) still fails evaluating (SRC_ARG_COLLISION_OK) —
+      the inner message is still 'The "src" package has been renamed to
+      "simple-revision-control"', now wrapped in nix 2.35's
+      'while calling a functor (an attribute set with a __functor attribute)'
+      context, which makes the wrong-cause error message even less obvious;
+      renaming the argument to `srcTree` returns the default path
+      "/tmp/cp-src-demo".
 
 provenance:
   discovered_by: "opencode/agents@btop-cyberpunk@2026-10-05; re-verified by hermes-cron@2026-10-12"
