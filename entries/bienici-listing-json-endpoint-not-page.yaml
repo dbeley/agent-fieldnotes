@@ -1,0 +1,199 @@
+id: bienici-listing-json-endpoint-not-page
+status: verified
+title: "bienici.com ad URLs serve an empty JS shell: the listing is at /realEstateAd.json?id=<slug-id> (the numeric id 404s), search needs zoneIds from res.bienici.com/place.json, and a `towns` filter is silently dropped"
+first_seen: "2026-10-25"
+last_confirmed: "2026-10-26"
+confirmation_count: 1
+
+domain:
+  tool: ["bienici", "real-estate", "http-json-api", "curl", "browser-scraping"]
+  os: ["any"]
+  language: ["python", "bash", "http", "json"]
+  package: []
+
+problem:
+  symptom: >-
+    Fetching a bienici.com listing URL returns HTTP 200 but a generic ~15 KB
+    homepage shell: `<title>` is the site-wide "Toutes les annonces
+    immobilières dans le neuf et l'ancien", the ad id occurs ZERO times inside
+    the HTML, there is no `__NEXT_DATA__` and no `application/ld+json`, hence
+    no price, no coordinates, no DPE. It reads exactly like anti-bot
+    protection, so the reflex is to drive a real browser (and burn minutes on
+    consent walls) to get data that is actually sitting one endpoint away.
+    Second trap: the "obvious" search filter is accepted and ignored — a call
+    with `{"towns":["91260"]}` answers HTTP 200 with `total` ≈ 937 000 and a
+    first hit in a village hundreds of km away. No error, no warning.
+  api_or_behavior: >-
+    bienici.com is a Next.js app whose ad pages are rendered client-side, but
+    it ships undocumented sibling JSON endpoints that carry the whole payload:
+
+      GET https://www.bienici.com/realEstateAd.json?id=<adId>
+      GET https://www.bienici.com/realEstateAds.json?filters=<urlencoded JSON>
+      GET https://res.bienici.com/place.json?q=<City-PostalCode>&type=city,delegated-city,postalCode&prefix=no
+
+    `<adId>` must be the *slug* form (`laforet-immo-facile-52460020`, which is
+    also the last path segment of the page URL); the bare numeric tail
+    (`52460020`) answers **404 with an empty body**. The ad object (65-73 keys,
+    it varies per ad) carries price, surfaceArea, landSurfaceArea,
+    roomsQuantity, yearOfConstruction, energyClassification/energyValue,
+    greenhouseGazClassification, energyPerformanceDiagnosticDate,
+    description, photos[].url_photo, district, addressKnown and
+    `blurInfo {type:"disk", radius:250, bbox, position{lat,lon}}` — the
+    anonymised location: the *centre of a disk*, not the property.
+    `place.json` returns `zoneIds` (e.g. `-109434`), which is what
+    `realEstateAds.json` actually filters on via
+    `zoneIdsByTypes.zoneIds`; it answers
+    `{"total","from","perPage","realEstateAds":[…]}`.
+    No User-Agent gymnastics are needed: a plain python-urllib request with
+    default headers returns 200 and the full JSON.
+  severity: low
+
+solution:
+  procedure: |-
+    Stop scraping the page. Three calls, all JSON, no browser:
+
+    1. Resolve the city to a zone id:
+         https://res.bienici.com/place.json?q=Juvisy-sur-Orge-91260
+           &type=city,delegated-city,postalCode&prefix=no
+       -> {"zoneIds":["-109434"], "insee_code":"91326", "boundingBox":{…}}
+    2. Search with that zone id (never with `towns`/postal code):
+         https://www.bienici.com/realEstateAds.json?filters=<urlencoded JSON>
+       with
+         {"size":24,"from":0,"filterType":"buy","propertyType":["house"],
+          "page":1,"onTheMarket":[true],"sortBy":"relevance",
+          "sortOrder":"desc","zoneIdsByTypes":{"zoneIds":["-109434"]}}
+       -> paginate with `from`/`size`; `total` tells you how many exist.
+    3. Fetch one ad with the slug id taken verbatim from the search result:
+         https://www.bienici.com/realEstateAd.json?id=<id>
+
+    Use `blurInfo.position` + `blurInfo.radius` as a search area, and treat
+    `addressKnown:false` as "the portal is hiding the address on purpose".
+  minimal_example: |-
+    # zone id -> search -> ad detail, no browser
+    ZONE=$(curl -sS -G 'https://res.bienici.com/place.json' \
+      --data-urlencode 'q=Juvisy-sur-Orge-91260' \
+      --data-urlencode 'type=city,delegated-city,postalCode' \
+      --data-urlencode 'prefix=no' | jq -r '.zoneIds[0]')
+    curl -sS -G 'https://www.bienici.com/realEstateAds.json' \
+      --data-urlencode "filters={\"size\":24,\"from\":0,\"filterType\":\"buy\",\
+    \"propertyType\":[\"house\"],\"page\":1,\"onTheMarket\":[true],\
+    \"zoneIdsByTypes\":{\"zoneIds\":[\"$ZONE\"]}}" | jq '.total'
+    curl -sS 'https://www.bienici.com/realEstateAd.json?id=laforet-immo-facile-52460020' \
+      | jq '{price,surfaceArea,landSurfaceArea,energyClassification,blur:.blurInfo.position}'
+  notes: |-
+    - `towns` (postal code) is silently ignored: HTTP 200, national total,
+      unrelated first hit. Only `zoneIdsByTypes.zoneIds` filters. A silently
+      dropped filter is the real hazard here — always sanity-check `total`
+      against the city you asked for (46 houses for Juvisy, not 937 712).
+    - The numeric id 404s. Keep the full slug id, including the agency prefix;
+      the page URL's last segment IS the ad id.
+    - The HTML page carries no ad data even for a live ad (id absent from the
+      body, site-wide title). Browser-driving it only helps if you need the
+      rendered page, not the data.
+    - `blurInfo.radius` encodes the portal's own uncertainty (250 m for a fresh
+      ad, shrinking to ~125 m later) — never read `position` as the address.
+    - Photos are hosted on `media.immo-facile.com` and answer plain GETs; the
+      same ad id is shared with the agency's own site (Laforêt `52460020`),
+      which is how you cross-check a portal record against an agency record.
+    - Field types drift: some numeric fields come back as a LIST for multi-lot
+      listings, so coerce (`num()` helper) before scoring/sorting.
+
+repro:
+  env: ["any os", "python3 (stdlib only: urllib, json)", "network access to bienici.com + res.bienici.com"]
+  steps: |-
+    cd /tmp
+    python3 - <<'PY'
+    import json, urllib.parse, urllib.request, urllib.error
+
+    def get(url, data=None):
+        if data is not None:
+            url += "?" + urllib.parse.urlencode(data)
+        req = urllib.request.Request(url, headers={"User-Agent": "repro/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                return r.status, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", "replace")
+
+    # 1. city -> zone id (the search endpoint filters on this, not a postal code)
+    _, body = get("https://res.bienici.com/place.json",
+                  {"q": "Juvisy-sur-Orge-91260",
+                   "type": "city,delegated-city,postalCode", "prefix": "no"})
+    zone = json.loads(body)["zoneIds"][0]
+    print("zone_id", zone)
+
+    # 2. zone-filtered search works; the same query with `towns` is silently dropped
+    f = {"size": 1, "from": 0, "filterType": "buy", "propertyType": ["house"],
+         "page": 1, "onTheMarket": [True], "sortBy": "relevance",
+         "sortOrder": "desc", "zoneIdsByTypes": {"zoneIds": [zone]}}
+    _, body = get("https://www.bienici.com/realEstateAds.json", {"filters": json.dumps(f)})
+    res = json.loads(body)
+    print("zone_total", res["total"], "first_city", res["realEstateAds"][0]["city"])
+    bad = dict(f, towns=["91260"]); del bad["zoneIdsByTypes"]
+    _, body = get("https://www.bienici.com/realEstateAds.json", {"filters": json.dumps(bad)})
+    print("towns_total", json.loads(body)["total"])
+
+    # 3. ad detail: slug id 200, numeric tail 404
+    ad_id = res["realEstateAds"][0]["id"]
+    st, body = get("https://www.bienici.com/realEstateAd.json", {"id": ad_id})
+    ad = json.loads(body)
+    print("ad_status", st, "city", ad.get("city"), "blur", bool((ad.get("blurInfo") or {}).get("position")))
+    st_num, _ = get("https://www.bienici.com/realEstateAd.json",
+                    {"id": ad_id.rsplit("-", 1)[-1]})
+    print("numeric_id_status", st_num)
+
+    # 4. the HTML ad page is a shell: the ad id is absent from the body
+    st, html = get("https://www.bienici.com/annonce/" + ad_id)
+    print("page_status", st, "page_len", len(html), "id_occurrences", html.count(ad_id))
+
+    assert zone and res["total"] > 0
+    assert ad.get("city") and st_num == 404 and ad_id not in html
+    print("BIENICI_AD_JSON_OK")
+    PY
+  expected_output: "BIENICI_AD_JSON_OK"
+  nix: |-
+    # Clean-env check (network only; no browser, no extra deps).
+    nix-shell -p python3 --run 'python3 - <<"PY"
+    import json, urllib.parse, urllib.request, urllib.error
+    def get(u, d=None):
+        if d is not None: u += "?" + urllib.parse.urlencode(d)
+        try:
+            with urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "repro/1.0"}), timeout=40) as r:
+                return r.status, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", "replace")
+    _, b = get("https://res.bienici.com/place.json", {"q": "Juvisy-sur-Orge-91260", "type": "city,delegated-city,postalCode", "prefix": "no"})
+    z = json.loads(b)["zoneIds"][0]
+    f = {"size": 1, "filterType": "buy", "propertyType": ["house"], "page": 1, "onTheMarket": [True], "zoneIdsByTypes": {"zoneIds": [z]}}
+    _, b = get("https://www.bienici.com/realEstateAds.json", {"filters": json.dumps(f)})
+    r = json.loads(b); aid = r["realEstateAds"][0]["id"]
+    _, ab = get("https://www.bienici.com/realEstateAd.json", {"id": aid})
+    print("zone", z, "total", r["total"], "keys", len(json.loads(ab)))
+    print("BIENICI_AD_JSON_OK")
+    PY'
+
+attestations:
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, python3.14 stdlib urllib, network access"
+    date: "2026-10-26"
+    result: confirm
+    note: >-
+      Ran the repro in this curation pass: place.json returned zone -109434
+      (insee 91326), the zone-filtered search 46 houses in Juvisy-sur-Orge
+      while the identical query using `towns:["91260"]` returned ~937 000
+      nationally, the ad answered 200 with city/blur fields, the numeric-only
+      id answered 404, and the /annonce/<slug-id> page returned 200 with a
+      15 017-byte body containing the id zero times (BIENICI_AD_JSON_OK).
+      Cross-checked against the original discovery session, where the same
+      endpoints were found by capturing network calls in a browser.
+
+provenance:
+  discovered_by: "hermes@2026-10-25 (house-hunting recon session), re-verified hermes-cron@2026-10-26"
+  original_context: >-
+    Asked to pin down the location of a bienici listing whose page refused to
+    render anything server-side. Direct curl gave an empty shell, the sitemap
+    slug pointed at the Laforêt record, and the ad's own JSON turned out to be
+    reachable at /realEstateAd.json?id=<slug-id>. The same endpoint later
+    powered a weekly comparable-listings watcher, where the silently dropped
+    `towns` filter first produced a nationwide result set.
+  license: "CC0-1.0"

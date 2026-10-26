@@ -2,8 +2,8 @@ id: pyyaml-nixpkgs-attr-name-mismatch
 status: verified
 title: "nixpkgs: PyYAML's attribute is python3Packages.pyyaml, not .yaml"
 first_seen: "2026-08-21"
-last_confirmed: "2026-10-19"
-confirmation_count: 4
+last_confirmed: "2026-10-26"
+confirmation_count: 5
 
 domain:
   tool: ["nix-shell", "nixpkgs"]
@@ -55,7 +55,8 @@ repro:
 
     # WRONG attr fails with a suggestion list that is NOT a drop-in:
     nix-shell -p python3Packages.yaml --run true
-    # -> error: attribute 'yaml' missing; suggestions: oyaml, pyaml, yarl, dazl, enaml
+    # -> error: attribute 'yaml' missing
+    #    Did you mean one of oyaml, pyaml, yarl, dazl or enaml?   (wording drifts per Nix version)
   expected_output: "6.0.3"
   nix: |
     # Rule-of-thumb check: resolve the attribute and import the module.
@@ -91,6 +92,20 @@ attestations:
       `nix-shell -p python3Packages.yaml --run true` -> "error: attribute 'yaml'
       missing" whose suggestion list names only oyaml/pyaml/yarl/dazl/enaml. The
       attribute/import-name mismatch still holds on the current nixpkgs.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.3"
+    date: "2026-10-26"
+    result: confirm
+    note: >-
+      Curation re-run (4th time): `nix-shell -p python3Packages.pyyaml --run
+      'python3 -c "import yaml; print(yaml.__version__)"'` -> 6.0.3 on the
+      nixpkgs of 2026-10-26. The wrong attribute still fails, but the message
+      wording has drifted from what earlier attestations quoted: it is now
+      "error: attribute 'yaml' missing … Did you mean one of oyaml, pyaml,
+      yarl, dazl or enaml?" (separator words, not a "suggestions:" list) — so
+      regexes matching "suggestions:" in that error break, the attribute
+      rename itself does not.
 
 provenance:
   discovered_by: "dbeley@2026-08-21"

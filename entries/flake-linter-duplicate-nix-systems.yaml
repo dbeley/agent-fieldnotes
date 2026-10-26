@@ -2,8 +2,8 @@ id: flake-linter-duplicate-nix-systems
 status: verified
 title: "flake-linter warns 'nix-systems/default has multiple versions' — fix with systems.follows"
 first_seen: "2026-08-30"
-last_confirmed: "2026-10-19"
-confirmation_count: 4
+last_confirmed: "2026-10-26"
+confirmation_count: 5
 
 domain:
   tool: ["flake-linter", "nix flake"]
@@ -178,6 +178,17 @@ attestations:
       printing no warning. Wrote flake.lock against nixpkgs-unstable
       fe13242281a67641c0102cdb1087f0ebe586c7df (2026-10-15) and
       nix-systems/default d36eeed142f88b5a636f2e3856a53c61654cf29b.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.3"
+    date: "2026-10-26"
+    result: confirm
+    note: >-
+      Curation re-run (4th time) on the 2026-10-26 nixpkgs: the repro re-locked
+      the minimal flake (flake-utils from 2026-10-13, nixpkgs 2026-10-23,
+      nix-systems/default 2026-10-05) with a single `systems` node and printed
+      FLAKE_LOCK_CLEAN; the wrong shape (duplicate nix-systems from
+      flake-utils) still trips the linter's "multiple versions" warning.
 
 provenance:
   discovered_by: "hermes@nixos-era-hermes@2026-08-30"
