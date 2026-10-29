@@ -20,10 +20,12 @@ Deps: PyYAML.   uv run --with pyyaml python scripts/render.py
 
 import html
 import json
+import os
 import shutil
 import sys
 from datetime import datetime, date
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     import yaml
@@ -43,6 +45,32 @@ SITE_TAGLINE = (
 # Absolute base URL of the deployed instance (used for canonical/og/sitemap URLs).
 # Override when forking: SITE_BASE_URL.
 SITE_BASE_URL = "https://dbeley.github.io/agent-fieldnotes"
+
+
+def _repo_slug(base_url: str) -> str:
+    """Derive 'owner/repo' from a GitHub Pages base URL.
+
+    'https://<owner>.github.io/<repo>' -> '<owner>/<repo>'. Falls back to the
+    upstream template repo so a fork that forgets to set SITE_BASE_URL still
+    produces a valid (if upstream-pointing) schema link instead of a 404.
+    """
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
+    segments = [s for s in parsed.path.split("/") if s]
+    owner = host.split(".")[0] if host.endswith(".github.io") else ""
+    repo = segments[0] if segments else ""
+    return f"{owner}/{repo}" if owner and repo else "dbeley/agent-fieldnotes"
+
+
+# URL of the klog format spec advertised in the page header. Derived, never a
+# hardcoded placeholder: a literal "USER" there shipped as a 404. Override with
+# KLOG_SCHEMA_URL when the schema is hosted elsewhere.
+SCHEMA_URL = os.environ.get("KLOG_SCHEMA_URL") or (
+    "https://raw.githubusercontent.com/"
+    + _repo_slug(SITE_BASE_URL)
+    + "/main/schema/klog.yaml"
+)
+SCHEMA_LOCAL_PATH = "schema/klog.yaml"
 
 
 def _load_entries():
@@ -252,7 +280,8 @@ def _page(cards_html, entry=None, page_path=None):
     <a href="index.json">index.json (full)</a>
     <a href="latest.json">latest.json</a>
     <a href="search.json">search.json</a>
-    · schema: <a href="https://raw.githubusercontent.com/USER/agent-fieldnotes/main/schema/klog.yaml">klog</a>
+    · schema: <a href="{SCHEMA_URL}">klog</a>
+    <a href="{SCHEMA_LOCAL_PATH}">schema/klog.yaml (mirror)</a>
   </p>
   {cards_html}
 </body>
@@ -284,6 +313,16 @@ def main():
     ]
     with open(SITE_DIR / "search.json", "w", encoding="utf-8") as fh:
         json.dump(search_index, fh, indent=2)
+
+    # schema mirror: keep the format spec resolvable from the deployed site
+    # itself, so the header link survives raw.githubusercontent outages/rate limits.
+    schema_src = ROOT / SCHEMA_LOCAL_PATH
+    if schema_src.is_file():
+        dst = SITE_DIR / SCHEMA_LOCAL_PATH
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(schema_src, dst)
+    else:
+        print(f"WARN: {schema_src} missing — schema mirror not published", file=sys.stderr)
 
     # human pages (with per-entry head metadata for SEO/discovery)
     cards = "".join(_render_entry_html(e) for e in entries)
