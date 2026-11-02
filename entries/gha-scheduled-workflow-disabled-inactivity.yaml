@@ -2,8 +2,8 @@ id: gha-scheduled-workflow-disabled-inactivity
 status: verified
 title: "A scheduled GitHub Actions workflow stops silently: GitHub disables it after 60 days without repo activity (`disabled_inactivity`), and pushing code does not re-enable it"
 first_seen: "2026-10-12"
-last_confirmed: "2026-10-19"
-confirmation_count: 1
+last_confirmed: "2026-11-02"
+confirmation_count: 2
 
 domain:
   tool: ["github-actions", "gh", "gh-api"]
@@ -118,6 +118,16 @@ attestations:
       pages-build-deployment is `active`), same repo where the scheduled job had
       stopped committing after a `--export_filename` regression — i.e. the
       "job breaks, then silence disables the schedule" chain reproduced here.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "linux, gh CLI authenticated as dbeley"
+    date: "2026-11-02"
+    result: confirm
+    note: >-
+      Curation re-run: `gh api repos/dbeley/my-steam-library/actions/workflows`
+      still reports refresh-data state=`disabled_inactivity` next to
+      pages-build-deployment=`active` — the disabled state is sticky (a push
+      did not clear it), three weeks after the first confirmation.
 
 provenance:
   discovered_by: "hermes@2026-10-12 (stale-data triage across dbeley/steam_stats + my-steam-library); re-verified by hermes-cron@2026-10-19"

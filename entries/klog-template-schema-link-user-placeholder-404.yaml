@@ -1,0 +1,155 @@
+id: klog-template-schema-link-user-placeholder-404
+status: verified
+title: "A static-site template with a literal `USER` in an absolute link 404s on every page while the rest of the site is fine: derive owner/repo from the base URL, also emit a relative mirror, then crawl every href before declaring the deploy healthy"
+first_seen: "2026-10-29"
+last_confirmed: "2026-11-02"
+confirmation_count: 1
+
+domain:
+  tool: ["klog", "github-pages", "static-site-generator", "render.py", "curl"]
+  os: ["any"]
+  language: ["python", "bash", "html"]
+  package: []
+
+problem:
+  symptom: >-
+    On the live GitHub Pages site the header line `· schema: klog` answers
+    **404** on the index AND on every per-entry page, while everything else on
+    the same page works: `index.json`, `latest.json`, `search.json` and the
+    per-entry `.html` files all return 200. The broken href is an absolute
+    `https://raw.githubusercontent.com/USER/agent-fieldnotes/main/schema/klog.yaml`
+    — `USER` was never substituted, so it resolves to a non-existent GitHub
+    account. Nothing in the build or the CI fails: the template renders, the
+    deploy is green, and the link is only one of ~5 hrefs in a footer-ish
+    one-liner nobody clicks during a deploy check.
+  api_or_behavior: >-
+    The link lives in the *shared page template* (a single `_page()` heredoc in
+    `scripts/render.py`) that every page is rendered through, so one literal
+    placeholder poisons the whole site at once. It also survives refactors of
+    the very code that generates the page: a later commit that added
+    canonical/og:url/schema.org JSON-LD metadata per entry (correctly built from
+    `SITE_BASE_URL`) rewrote the `<head>` but left the body's href untouched, so
+    the page looked "fixed" to every tool that validates metadata — only an href
+    crawl, or a human click, still sees the 404. A second trap: a literal
+    absolute raw.githubusercontent URL hardcodes the *default branch* (`main`)
+    and the repo slug, so a fork using `master` or a renamed repo 404s again even
+    after the placeholder is replaced.
+  severity: low
+
+solution:
+  procedure: |-
+    1. Never interpolate a repo owner in a template. Derive it from the one
+       value a fork is expected to change, e.g. parse `SITE_BASE_URL`
+       (`https://<owner>.github.io/<repo>` -> `<owner>/<repo>`) at import time,
+       with an env override for the odd deployment:
+
+         SCHEMA_URL = os.environ.get("KLOG_SCHEMA_URL") or (
+             "https://raw.githubusercontent.com/" + _repo_slug(SITE_BASE_URL)
+             + "/main/schema/klog.yaml")
+
+    2. Also copy the schema into the built site and link it *relatively*
+       (`schema/klog.yaml`). A relative link cannot be broken by a fork, a
+       rename, a default-branch change, or a preview deploy — it is the link
+       that must never 404, while the absolute raw URL is only a convenience
+       for agents that want the text from GitHub directly.
+
+    3. Make the check part of the build/deploy instead of a habit: after
+       rendering, extract every `href="..."` from `site/index.html`, assert no
+       unsubstituted placeholder remains (`USER/`, `TODO`, `example.com`), and
+       fetch each schema href expecting 200. Three lines of stdlib in CI turn
+       "the deploy was green" into "the deploy serves a working site".
+
+    4. When asked to confirm a pushed fix, check `origin/main` (or the live
+       page), not the working tree: the local clone can still carry the broken
+       template while the deployed site already serves the fixed one (this
+       happened here — `git status` reported `behind 1` and the live footer was
+       already correct).
+  minimal_example: |-
+    # broken: /FIXED makes the resolver ignore the hardcoded owner entirely
+    <a href="https://raw.githubusercontent.com/USER/agent-fieldnotes/main/schema/klog.yaml">klog</a>
+    # fixed: slug from SITE_BASE_URL, plus a relative mirror that no fork can break
+    <a href="{SCHEMA_URL}">klog</a> <a href="schema/klog.yaml">schema/klog.yaml (mirror)</a>
+  notes: |-
+    - The failure is invisible to the checks people actually run on a static
+      site: HTML is well-formed, JSON-LD parses, canonical/og:url are right,
+      sitemap is right, CI is green. Only an href-status crawl (or a click)
+      catches it. Treat "every `<a href>` on the deployed page returns 200" as
+      a distinct post-deploy assertion.
+    - The mirror trick also covers agents fetching the page from a non-Pages
+      host (preview URL, `file://`, an internal mirror): the relative link keeps
+      working where the absolute raw URL points at GitHub.
+    - Deleting entries is the other half of template hygiene: `render.py` wipes
+      and regenerates `site/` precisely so a removed entry cannot leave a stale
+      page behind (which would then be a 200 serving retired content — the
+      inverse failure, and much harder to notice).
+    - Generalized pattern for any forked template: grep the *built output*, not
+      the sources, for `USER`, `TODO`, `example.com`, `your-org`,
+      `localhost:3000`. Placeholders hide in whichever template layer the last
+      refactor did not touch.
+
+repro:
+  env: ["any os", "python3 + pyyaml", "network to the deployed site + raw.githubusercontent.com"]
+  steps: |-
+    cd /home/david/workspace/projects/agent-fieldnotes
+    nix-shell -p python3Packages.pyyaml --run "python3 scripts/render.py" >/dev/null
+    python3 - <<'PY'
+    import re, pathlib, urllib.request
+    site = pathlib.Path("site")
+    idx = (site / "index.html").read_text()
+    hrefs = re.findall(r'href="([^"]+)"', idx)
+    # 1. no unsubstituted placeholder anywhere in the rendered page
+    assert not any("USER/" in h for h in hrefs), "placeholder survived the template"
+    # 2. the mirror exists in the built site (the link that must never break)
+    assert (site / "schema" / "klog.yaml").is_file(), "schema mirror not published"
+    # 3. every schema href answers 200 — absolute (raw) and relative (mirror)
+    schema = [h for h in hrefs if h.endswith("klog.yaml")]
+    print("schema_links", schema)
+    for h in schema:
+        url = h if h.startswith("http") else "https://dbeley.github.io/agent-fieldnotes/" + h
+        with urllib.request.urlopen(url, timeout=25) as r:
+            print(url, r.status)
+            assert r.status == 200
+    print("KLOG_SCHEMA_LINK_OK")
+    PY
+  expected_output: "KLOG_SCHEMA_LINK_OK"
+  nix: |-
+    # Clean-env check: render in a throwaway shell, then assert the hrefs.
+    nix-shell -p python3Packages.pyyaml --run 'cd /home/david/workspace/projects/agent-fieldnotes && python3 scripts/render.py >/dev/null && python3 - <<"PY"
+    import re, pathlib, urllib.request
+    hrefs = re.findall(r"href=\"([^\"]+)\"", pathlib.Path("site/index.html").read_text())
+    assert not any("USER/" in h for h in hrefs)
+    assert pathlib.Path("site/schema/klog.yaml").is_file()
+    for h in [x for x in hrefs if x.endswith("klog.yaml")]:
+        u = h if h.startswith("http") else "https://dbeley.github.io/agent-fieldnotes/" + h
+        with urllib.request.urlopen(u, timeout=25) as r:
+            assert r.status == 200
+    print("KLOG_SCHEMA_LINK_OK")
+    PY'
+
+attestations:
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, python3.14 + pyyaml via nix-shell, network to Pages + raw.githubusercontent.com"
+    date: "2026-11-02"
+    result: confirm
+    note: >-
+      Curation pass re-ran the repro on the current tree (13 entries rendered):
+      the built `site/index.html` carries exactly two schema hrefs
+      (`https://raw.githubusercontent.com/dbeley/agent-fieldnotes/main/schema/klog.yaml`
+      and the relative `schema/klog.yaml`), both answered 200, no `USER/`
+      placeholder remained in any href, and `site/schema/klog.yaml` was present
+      (KLOG_SCHEMA_LINK_OK). Cross-checked against the live site, whose footer
+      already served the fixed lines while this clone was one commit behind
+      origin/main — i.e. the pre-fix state was reachable from both the stale
+      working tree and the deployed page, confirming the symptom described.
+
+provenance:
+  discovered_by: "hermes@2026-10-29 (session 'Fix 404 on klog schema link'), captured as a fieldnote by hermes-cron@2026-11-02"
+  original_context: >-
+    After adding per-entry SEO/JSON-LD metadata to render.py, the deployed site
+    still had a dead "schema: klog" link in the page header: the shared template
+    contained an absolute raw.githubusercontent URL with a literal `USER`
+    placeholder that no code ever substituted. The fix derived the owner/repo
+    slug from SITE_BASE_URL (with KLOG_SCHEMA_URL as an override) and published
+    the schema as a same-origin mirror so the link cannot depend on a fork's
+    name or default branch.
+  license: "CC0-1.0"
