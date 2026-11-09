@@ -2,8 +2,8 @@ id: nixos-android-sdk-apksigner-wrapper-unsigned-release-apks
 status: verified
 title: "NixOS: Android SDK's apksigner wrapper dies with 'bad interpreter' (Gradle never uses it, so APK verification silently fails) — verify via java -jar .../lib/apksigner.jar; Capacitor release builds are unsigned by default"
 first_seen: "2026-10-03"
-last_confirmed: "2026-10-12"
-confirmation_count: 2
+last_confirmed: "2026-11-09"
+confirmation_count: 3
 
 domain:
   tool: ["android-sdk", "apksigner", "gradle", "capacitor"]
@@ -108,11 +108,15 @@ repro:
     BT="$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1)"
     test -n "$BT" || { echo "no build-tools under $ANDROID_HOME"; exit 1; }
 
-    # 1. The wrapper is a bash script NixOS cannot exec
+    # 1. The wrapper is a bash script NixOS cannot exec.
+    #    Assert the EXIT CODE, not the message: bash's exec-failure text is
+    #    locale-dependent (fr_FR: "mauvais interpréteur") and, under
+    #    `nix-shell --run`, was observed NOT to survive a `2>&1 | grep`
+    #    (false negative). Redirect to a file and check rc == 126.
     head -1 "$BT/apksigner" | grep -q '^#!/bin/bash' && echo SHEBANG_OK
-    if "$BT/apksigner" --version 2>&1 | grep -qiE 'bad interpreter|mauvais interpréteur'; then
-      echo WRAPPER_BROKEN_OK
-    fi
+    "$BT/apksigner" --version >/dev/null 2>/tmp/apksigner.err; rc=$?
+    grep -i . /tmp/apksigner.err || true
+    [ "$rc" -eq 126 ] && echo WRAPPER_BROKEN_OK
 
     # 2. patchelf cannot fix it (script, not ELF) — expected to fail:
     #    patchelf "$BT/apksigner"   # -> "patchelf: not an ELF executable"
@@ -180,6 +184,23 @@ attestations:
       nix store path), but running the repro inside `nix-shell -p jdk21` works:
       `java -jar $BT/lib/apksigner.jar --version` -> 0.9 (JAR_WORKS_OK,
       APKSIGNER_WRAPPER_REPRO_OK). Wrapper-still-broken + jar-works path intact.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, android-sdk build-tools 34/35/36, jdk21 via nix-shell"
+    date: "2026-11-09"
+    result: confirm
+    note: >-
+      Curation re-run with build-tools/36.0.0: `head -1 apksigner` is
+      `#!/bin/bash`; direct exec exits 126 with `...: /bin/bash: mauvais
+      interpréteur: Aucun fichier ou dossier de ce nom` (fr_FR locale);
+      `java -jar .../lib/apksigner.jar --version` -> 0.9
+      (SHEBANG_OK, WRAPPER_BROKEN_OK, JAR_WORKS_OK, APKSIGNER_WRAPPER_REPRO_OK).
+      Repro fix from this run: the message-grep form was a FALSE NEGATIVE here —
+      inside `nix-shell -p jdk21 --run '...'`, `apksigner 2>&1 | grep -qiE
+      'mauvais interpréteur'` reported no match (the diagnostic was emitted on
+      the outer shell's stderr, bypassing the pipe). The entry's step 1 now
+      asserts rc == 126 with stderr redirected to a file instead of grepping a
+      locale-dependent message.
 
 provenance:
   discovered_by: "opencode/agents@woodshed+jazzmetronome+subsonic-tui@2026-10-01..03; consolidated by hermes-cron@2026-10-05"

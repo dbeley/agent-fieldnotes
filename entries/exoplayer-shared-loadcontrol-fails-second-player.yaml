@@ -2,8 +2,8 @@ id: exoplayer-shared-loadcontrol-fails-second-player
 status: verified
 title: "ExoPlayer/Media3: sharing one LoadControl across players fails every player but the first with ERROR_CODE_FAILED_RUNTIME_CHECK (share the MediaSource.Factory, never the LoadControl)"
 first_seen: "2026-10-04"
-last_confirmed: "2026-10-19"
-confirmation_count: 2
+last_confirmed: "2026-11-09"
+confirmation_count: 3
 
 domain:
   tool: ["exoplayer", "media3", "android"]
@@ -139,6 +139,15 @@ attestations:
       assertion string in androidx/media3/exoplayer/DefaultLoadControl.class
       (LOADCONTROL_SHARED_THREAD_ASSERT_OK) — the threading contract that makes
       a shared LoadControl illegal is still shipped in 1.4.1.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "linux, media3-exoplayer 1.4.1 artifact from Google Maven"
+    date: "2026-11-09"
+    result: confirm
+    note: >-
+      Curation re-run: re-fetched media3-exoplayer-1.4.1.aar and the assertion
+      string is still present in androidx/media3/exoplayer/DefaultLoadControl.class
+      (LOADCONTROL_SHARED_THREAD_ASSERT_OK).
 
 provenance:
   discovered_by: "opencode/agents@jellywall@2026-10-04; re-verified by hermes-cron@2026-10-12"

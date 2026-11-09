@@ -2,8 +2,8 @@ id: qbittorrent-webui-403-unauthenticated-not-endpoint
 status: verified
 title: "qBittorrent WebUI: a bare 403 means \"no session\", not \"endpoint forbidden\" — the auth check runs before the endpoint is looked up"
 first_seen: "2026-10-12"
-last_confirmed: "2026-10-19"
-confirmation_count: 1
+last_confirmed: "2026-11-09"
+confirmation_count: 2
 
 domain:
   tool: ["qbittorrent", "qbittorrent-nox", "webui", "rest-api", "curl"]
@@ -149,6 +149,16 @@ attestations:
       /torrents/pause with a session-free client, planning GETs working) was
       observed while building an archive.org torrent reviver against a local
       qBittorrent 5.2.3; the source assertions above are what this repro pins.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, curl; qBittorrent release-5.2.3 source"
+    date: "2026-11-09"
+    result: confirm
+    note: >-
+      Curation re-run: fetched src/webui/webapplication.cpp at tag release-5.2.3
+      and re-asserted the ordering (bare ForbiddenHTTPError before
+      getAPIController), QBT_SID_ + getWebUIPort() cookie name, and status(204)
+      (QBIT_403_BEFORE_ROUTING_OK).
 
 provenance:
   discovered_by: "hermes@2026-10-12 (archive-org torrent reviver session); source-pinned by hermes-cron@2026-10-19"
