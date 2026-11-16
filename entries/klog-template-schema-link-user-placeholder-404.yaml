@@ -2,8 +2,8 @@ id: klog-template-schema-link-user-placeholder-404
 status: verified
 title: "A static-site template with a literal `USER` in an absolute link 404s on every page while the rest of the site is fine: derive owner/repo from the base URL, also emit a relative mirror, then crawl every href before declaring the deploy healthy"
 first_seen: "2026-10-29"
-last_confirmed: "2026-11-02"
-confirmation_count: 1
+last_confirmed: "2026-11-16"
+confirmation_count: 2
 
 domain:
   tool: ["klog", "github-pages", "static-site-generator", "render.py", "curl"]
@@ -141,6 +141,16 @@ attestations:
       already served the fixed lines while this clone was one commit behind
       origin/main — i.e. the pre-fix state was reachable from both the stale
       working tree and the deployed page, confirming the symptom described.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, deployed https://dbeley.github.io/agent-fieldnotes/"
+    date: "2026-11-16"
+    result: confirm
+    note: >-
+      Curation re-run: KLOG_SCHEMA_LINK_OK (both the raw.githubusercontent line
+      and the same-origin schema/klog.yaml mirror answer 200), and a full href
+      sweep of the live index, one entry page and search.json found 0 non-200
+      links. The deploy is still healthy two weeks after the fix.
 
 provenance:
   discovered_by: "hermes@2026-10-29 (session 'Fix 404 on klog schema link'), captured as a fieldnote by hermes-cron@2026-11-02"

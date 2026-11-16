@@ -2,8 +2,8 @@ id: nix-flake-ref-served-stale-from-tarball-ttl-cache
 status: verified
 title: "`nix run github:owner/repo` keeps building the previous commit for up to tarball-ttl (3600 s): the ref resolution is cached in fetcher-cache-v4.sqlite"
 first_seen: "2026-10-14"
-last_confirmed: "2026-11-02"
-confirmation_count: 2
+last_confirmed: "2026-11-16"
+confirmation_count: 3
 
 domain:
   tool: ["nix", "nix run", "nix shell", "nix build", "nix flake"]
@@ -146,6 +146,16 @@ attestations:
       download attempt (PLAIN_SERVED_FROM_CACHE), while `--refresh` logged the
       `commits/HEAD` fetch, printed "using cached version" and also exited 0
       (REFRESH_REVALIDATES). tarball-ttl still 3600 on nix 2.35.2.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.6"
+    date: "2026-11-16"
+    result: confirm
+    note: >-
+      Curation re-run after the host nix upgrade 2.35.2 -> 2.35.6: tarball_ttl
+      still 3600, the dead-proxy call without `--refresh` still succeeded
+      (PLAIN_SERVED_FROM_CACHE) and `--refresh` still reached api.github.com
+      (REFRESH_REVALIDATES). The cache still masks the ref update on the newer nix.
 
 provenance:
   discovered_by: "hermes@2026-10-14 (user report: `nix run` takes a cached version)"

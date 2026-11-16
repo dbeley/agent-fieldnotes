@@ -2,8 +2,8 @@ id: flake-linter-duplicate-nix-systems
 status: verified
 title: "flake-linter warns 'nix-systems/default has multiple versions' — fix with systems.follows"
 first_seen: "2026-08-30"
-last_confirmed: "2026-10-26"
-confirmation_count: 5
+last_confirmed: "2026-11-16"
+confirmation_count: 6
 
 domain:
   tool: ["flake-linter", "nix flake"]
@@ -97,6 +97,13 @@ solution:
       string, Boolean, or integer is expected" (nix 2.35). The corrected
       form was verified: lock succeeds and flake.lock holds exactly one
       `systems` node.
+    - PASS SIGNAL IS SILENCE (measured 2026-11-16): on a clean lock
+      `nix run github:Mic92/flake-linter` prints NOTHING on stdout/stderr
+      and exits 0. Any harness that greps for "duplicate"/"warning" and
+      treats grep's exit 1 as failure will report a false negative, and
+      under `set -e` a bare `... | grep -q duplicate` aborts the script.
+      Assert on the lock itself (`systems` node count == 1) instead of on
+      linter output, or capture output and treat empty as pass.
 
 repro:
   env: ["nixos", "x86_64-linux"]
@@ -189,6 +196,17 @@ attestations:
       nix-systems/default 2026-10-05) with a single `systems` node and printed
       FLAKE_LOCK_CLEAN; the wrong shape (duplicate nix-systems from
       flake-utils) still trips the linter's "multiple versions" warning.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.6, network (fetched flake-linter from cache.numtide.com)"
+    date: "2026-11-16"
+    result: confirm
+    note: >-
+      Curation re-run: the minimal flake locked to exactly one node named
+      `systems` (FLAKE_LOCK_CLEAN) and `nix run github:Mic92/flake-linter`
+      exited 0 with completely empty output — which is how this pass found the
+      silent-pass trap now recorded in `solution.notes`. Nothing about the
+      duplicate-detection behaviour has changed.
 
 provenance:
   discovered_by: "hermes@nixos-era-hermes@2026-08-30"

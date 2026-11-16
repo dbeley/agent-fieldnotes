@@ -2,8 +2,8 @@ id: pyyaml-nixpkgs-attr-name-mismatch
 status: verified
 title: "nixpkgs: PyYAML's attribute is python3Packages.pyyaml, not .yaml"
 first_seen: "2026-08-21"
-last_confirmed: "2026-10-26"
-confirmation_count: 5
+last_confirmed: "2026-11-16"
+confirmation_count: 6
 
 domain:
   tool: ["nix-shell", "nixpkgs"]
@@ -106,6 +106,17 @@ attestations:
       yarl, dazl or enaml?" (separator words, not a "suggestions:" list) — so
       regexes matching "suggestions:" in that error break, the attribute
       rename itself does not.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.6"
+    date: "2026-11-16"
+    result: confirm
+    note: >-
+      Curation re-run (5th time): `nix-shell -p python3Packages.pyyaml --run
+      'python3 -c "import yaml; print(yaml.__version__)"'` -> 6.0.3 on nix 2.35.6,
+      and the wrong attribute still fails with "error: attribute 'yaml' missing
+      … Did you mean one of oyaml, pyaml, yarl, dazl or enaml?" (same wording as
+      the 2026-10-26 run, so the drift noted there is stable).
 
 provenance:
   discovered_by: "dbeley@2026-08-21"

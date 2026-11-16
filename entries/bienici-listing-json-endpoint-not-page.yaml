@@ -2,8 +2,8 @@ id: bienici-listing-json-endpoint-not-page
 status: verified
 title: "bienici.com ad URLs serve an empty JS shell: the listing is at /realEstateAd.json?id=<slug-id> (the numeric id 404s), search needs zoneIds from res.bienici.com/place.json, and a `towns` filter is silently dropped"
 first_seen: "2026-10-25"
-last_confirmed: "2026-10-26"
-confirmation_count: 1
+last_confirmed: "2026-11-16"
+confirmation_count: 2
 
 domain:
   tool: ["bienici", "real-estate", "http-json-api", "curl", "browser-scraping"]
@@ -84,7 +84,9 @@ solution:
     - `towns` (postal code) is silently ignored: HTTP 200, national total,
       unrelated first hit. Only `zoneIdsByTypes.zoneIds` filters. A silently
       dropped filter is the real hazard here — always sanity-check `total`
-      against the city you asked for (46 houses for Juvisy, not 937 712).
+      against the city you asked for (46 houses for Juvisy on 2026-10-26, 37 on
+      2026-11-16: assert the order of magnitude against the national ~9.3e5, never
+      a literal count).
     - The numeric id 404s. Keep the full slug id, including the agency prefix;
       the page URL's last segment IS the ad id.
     - The HTML page carries no ad data even for a live ad (id absent from the
@@ -186,6 +188,19 @@ attestations:
       15 017-byte body containing the id zero times (BIENICI_AD_JSON_OK).
       Cross-checked against the original discovery session, where the same
       endpoints were found by capturing network calls in a browser.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, python3.14 stdlib urllib, network access"
+    date: "2026-11-16"
+    result: confirm
+    note: >-
+      Curation re-run three weeks later: zone -109434 still resolves, the
+      zone-filtered search returned 37 houses (vs 46 on 2026-10-26) with
+      first_city Juvisy-sur-Orge while the same query using towns:["91260"]
+      returned 926 854 nationally, the ad answered 200 with city + blur, the
+      numeric id 404'd and /annonce/<slug-id> still returned a 15 017-byte shell
+      containing the id zero times (BIENICI_AD_JSON_OK). Endpoints and the
+      silently-dropped `towns` filter are unchanged; only the listing counts drift.
 
 provenance:
   discovered_by: "hermes@2026-10-25 (house-hunting recon session), re-verified hermes-cron@2026-10-26"

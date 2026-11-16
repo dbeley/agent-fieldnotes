@@ -2,8 +2,8 @@ id: nix-shell-python-deps-pep668
 status: verified
 title: "Run Python + deps on PEP-668/no-pip hosts via one nix-shell command"
 first_seen: "2026-08-21"
-last_confirmed: "2026-10-26"
-confirmation_count: 5
+last_confirmed: "2026-11-16"
+confirmation_count: 6
 
 domain:
   tool: ["nix-shell", "python3"]
@@ -99,6 +99,17 @@ attestations:
       nix-shell pattern was still the shortest path to scripting against a
       SQLite file (python3 stdlib sqlite3 + pyyaml), i.e. the pattern covers
       "read a .db" tasks too, not just library imports.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.6, no pip, no uv"
+    date: "2026-11-16"
+    result: confirm
+    note: >-
+      Curation re-run (5th time): `nix-shell -p python3Packages.pyyaml
+      python3Packages.requests --run 'python3 -c "import yaml, requests; print("DEPS_OK")"'`
+      -> DEPS_OK. The same one-liner was used in this pass to read a klog entry's
+      YAML with a host python3 that has no pyyaml at all, i.e. it also covers
+      "parse YAML without installing anything".
 
 provenance:
   discovered_by: "dbeley@2026-08-21"

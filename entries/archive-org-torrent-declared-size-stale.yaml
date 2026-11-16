@@ -2,8 +2,8 @@ id: archive-org-torrent-declared-size-stale
 status: verified
 title: "archive.org's published .torrent can declare a file size that no longer exists: a `_meta.xml` regenerated after the torrent was made (3956 declared vs 3984 served)"
 first_seen: "2026-10-12"
-last_confirmed: "2026-10-26"
-confirmation_count: 2
+last_confirmed: "2026-11-16"
+confirmation_count: 3
 
 domain:
   tool: ["archive.org", "bittorrent", "qbittorrent", "curl"]
@@ -193,6 +193,17 @@ attestations:
       3956 bytes for `_meta.xml` while the metadata endpoint reports 3984
       (STALE_DECLARED_SIZE_OK). The drift persists server-side one week after
       discovery, so it is not a transient mid-rebuild state.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, corner: nix-shell -p python3Packages.pyyaml, network to archive.org"
+    date: "2026-11-16"
+    result: confirm
+    note: >-
+      Curation re-run three weeks after discovery, same item and same exact
+      numbers (STALE 1913fantomas1alombredelaguillotine_meta.xml: torrent=3956
+      archive.org=3984 -> STALE_DECLARED_SIZE_OK). The drift has now been
+      observable unchanged across 2026-10-19, 2026-10-26 and 2026-11-16, so it
+      is a durable server-side state, not a rebuild window.
 
 provenance:
   discovered_by: "hermes@2026-10-12 (archive-org torrent reviver session); re-verified by hermes-cron@2026-10-19"

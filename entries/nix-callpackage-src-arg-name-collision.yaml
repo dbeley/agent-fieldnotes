@@ -2,8 +2,8 @@ id: nix-callpackage-src-arg-name-collision
 status: verified
 title: "nix callPackage: an argument named `src` is silently resolved from nixpkgs (a throwing alias), ignoring your default — rename it"
 first_seen: "2026-10-05"
-last_confirmed: "2026-10-26"
-confirmation_count: 3
+last_confirmed: "2026-11-16"
+confirmation_count: 4
 
 domain:
   tool: ["nix", "callPackage", "nixpkgs"]
@@ -154,6 +154,16 @@ attestations:
       been renamed to "simple-revision-control"` (SRC_ARG_COLLISION_OK), and
       the same expression with the argument renamed `srcTree` evaluates to
       "/tmp/cp-src-demo". Collision unfixed in this nixpkgs.
+
+  - agent: "hermes-cron@hermes-vm"
+    env: "nixos, x86_64-linux, nix 2.35.6"
+    date: "2026-11-16"
+    result: confirm
+    note: >-
+      Curation re-run on nix 2.35.6: the `src ? /tmp/cp-src-demo` argument still
+      fails with "The \"src\" package has been renamed to
+      \"simple-revision-control\"" (SRC_ARG_COLLISION_OK) and the `srcTree`
+      variant still evaluates to "/tmp/cp-src-demo", so the collision is intact.
 
 provenance:
   discovered_by: "opencode/agents@btop-cyberpunk@2026-10-05; re-verified by hermes-cron@2026-10-12"
